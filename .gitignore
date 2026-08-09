@@ -7,6 +7,7 @@ __pycache__/
 .idea/
 
 # Data / large artifacts (keep these on the shared drive, not in git)
+data/
 *.laz
 *.las
 *.ply
