@@ -32,12 +32,7 @@ This repo contains **tools only**. Data lives in your working folder (`<WORK>`) 
 - **`<FUNC_ROOT>`** — functional attribute labels (HDF5 files from the pipeline)
   - **Download from:** https://drive.google.com/drive/u/2/folders/1oZznQD63gJPRiqzEvqFvXkbmp7ALylXY
   - Extract to your working folder or keep elsewhere on your PC
-  - Admin: Use this path when building review clouds
-  - Reviewers: Keep locally for `HFX3D_REVIEW_ROOT` environment variable
-
-- **`<INST_ROOT>`** — instance point clouds (geometry, HDF5 or LAZ)
-  - Located in your `hfx3d-benchmark` repo checkout
-  - Used only by Admin to build review clouds
+  - Use this path when building review clouds or setting up your environment
 
 ### In your working folder (`<WORK>`)
 
@@ -52,11 +47,11 @@ Created and used by this workflow:
 
 ### Optional — generate your own review clouds
 
-If you don't have review clouds from the AI server, the Admin can build them locally:
+If you need to build review clouds locally (advanced), contact the team for the instance point cloud data and run:
 
 ```powershell
 python review_admin.py build-all `
-  --inst-root "<INST_ROOT>" `
+  --inst-root "<path-to-instance-data>" `
   --func-root "<FUNC_ROOT>" `
   --out-root  "<WORK>\review_clouds"
 ```
@@ -77,21 +72,22 @@ Pick your part below.
 
 1. ✅ You've already cloned this repo and activated the venv
 
-2. Point to your local data paths. Edit the commands below to use:
-   - `<INST_ROOT>` — path to `hfx3d-benchmark\HFX3D_Instance+Semantic\instances_vis`
-   - `<FUNC_ROOT>` — path to functional labels (`.h5` files from pipeline)
+2. Point to your functional labels path. Edit the command below to use:
+   - `<FUNC_ROOT>` — path to functional labels (`.h5` files)
    - `<WORK>` — your local working folder (where you want review_clouds, reviews, etc.)
 
-3. **Build review clouds** (combines instances + attributes into `.laz` for CloudCompare):
+3. **If you need to build review clouds locally** (most of the time you'll download from AI server):
 
    ```powershell
    python review_admin.py build-all `
-     --inst-root "<INST_ROOT>" `
+     --inst-root "<path-to-instance-data>" `
      --func-root "<FUNC_ROOT>" `
      --out-root  "<WORK>\review_clouds"
    ```
 
-4. **Upload review clouds to AI server** so reviewers can download them
+   Then upload to AI server for your team to download. **Otherwise, skip this step.**
+
+4. Reviewers download review clouds from AI server and start reviewing
 
 That's it! When reviews come back, see **Export** below.
 
