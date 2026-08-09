@@ -25,17 +25,41 @@ pip install -r requirements.txt
 
 ## Where data lives
 
-This repo contains **tools only**. You need to set up paths to:
+This repo contains **tools only**. Data lives in your working folder (`<WORK>`) and elsewhere:
 
-- **`<FUNC_ROOT>`** — functional attribute labels (HDF5 files)
+### Required (you must provide these)
+
+- **`<FUNC_ROOT>`** — functional attribute labels (HDF5 files from the pipeline)
   - Admin: Generate or receive from pipeline
-  - Reviewers: Downloaded → stored in your working folder
-- **`<INST_ROOT>`** — instance point clouds (HDF5 or LAZ)
+  - Reviewers: Download from AI server → place in your working folder
+
+- **`<INST_ROOT>`** — instance point clouds (geometry, HDF5 or LAZ)
   - Located in your `hfx3d-benchmark` repo checkout
-- **`<WORK>`** — your local working folder (wherever you clone the repo or create a workspace)
-  - `review_clouds/` — downloaded here, opened by reviewers
-  - `reviews/` — your JSON edits
-  - `functional_labels_reviewed/` — exported HDF5 after review
+  - Used only by Admin to build review clouds
+
+### In your working folder (`<WORK>`)
+
+Created and used by this workflow:
+
+```
+<WORK>/
+  review_clouds/<split>/         ← Downloaded from AI server, reviewers open these in CloudCompare
+  reviews/<building>__<name>.json ← Your JSON edits (auto-saved while reviewing)
+  functional_labels_reviewed/    ← Exported HDF5 after review (Admin creates this)
+```
+
+### Optional — generate your own review clouds
+
+If you don't have review clouds from the AI server, the Admin can build them locally:
+
+```powershell
+python review_admin.py build-all `
+  --inst-root "<INST_ROOT>" `
+  --func-root "<FUNC_ROOT>" `
+  --out-root  "<WORK>\review_clouds"
+```
+
+Then upload them to the AI server for your team to download.
 
 ---
 
