@@ -33,13 +33,14 @@ cd hfx3d-functional-review
 - Restart CloudCompare
 - A **Functional Review** button should appear in the toolbar
 
-### 4. Set your reviewer name (once)
+### 4. Set your reviewer name and review folder (once)
 
 ```powershell
 setx HFX3D_REVIEWER "your-name"
+setx HFX3D_REVIEW_ROOT "C:\path\to\where\you\save\reviews"
 ```
 
-Close and reopen CloudCompare. Your name keeps your reviews separate from everyone else's.
+Close and reopen CloudCompare. Your name keeps your reviews separate from everyone else's, and the folder path tells the plugin where to save your JSON files.
 
 ---
 
@@ -88,7 +89,6 @@ When you finish a building, your edits are saved as a JSON file locally. Upload 
 
 **Upload to:** `/data/images/lidar_data/Functional_Attribute/reviews`
 
-Ask your team if you need help accessing the server.
 
 ---
 
