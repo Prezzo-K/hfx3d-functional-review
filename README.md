@@ -29,11 +29,11 @@ This repo contains **tools only**. You need to set up paths to:
 
 - **`<FUNC_ROOT>`** — functional attribute labels (HDF5 files)
   - Admin: Generate or receive from pipeline
-  - Reviewers: Downloaded from AI server → stored locally or on shared drive
+  - Reviewers: Downloaded → stored in your working folder
 - **`<INST_ROOT>`** — instance point clouds (HDF5 or LAZ)
   - Located in your `hfx3d-benchmark` repo checkout
-- **`<SHARED>`** — shared team folder (network drive or common location)
-  - `review_clouds/` — downloaded from AI server, opened by reviewers
+- **`<WORK>`** — your local working folder (wherever you clone the repo or create a workspace)
+  - `review_clouds/` — downloaded here, opened by reviewers
   - `reviews/` — your JSON edits
   - `functional_labels_reviewed/` — exported HDF5 after review
 
@@ -54,7 +54,7 @@ Pick your part below.
 2. Point to your local data paths. Edit the commands below to use:
    - `<INST_ROOT>` — path to `hfx3d-benchmark\HFX3D_Instance+Semantic\instances_vis`
    - `<FUNC_ROOT>` — path to functional labels (`.h5` files from pipeline)
-   - `<SHARED>` — where you want review clouds and team files to live
+   - `<WORK>` — your local working folder (where you want review_clouds, reviews, etc.)
 
 3. **Build review clouds** (combines instances + attributes into `.laz` for CloudCompare):
 
@@ -62,7 +62,7 @@ Pick your part below.
    python review_admin.py build-all `
      --inst-root "<INST_ROOT>" `
      --func-root "<FUNC_ROOT>" `
-     --out-root  "<SHARED>\review_clouds"
+     --out-root  "<WORK>\review_clouds"
    ```
 
 4. **Upload review clouds to AI server** so reviewers can download them
@@ -95,11 +95,11 @@ git clone <repo-url>
 - Restart CloudCompare
 - A **Functional Review** button should appear
 
-### 4. Set your name and shared folder (once)
+### 4. Set your name and working folder (once)
 
 ```powershell
 setx HFX3D_REVIEWER "your-name"
-setx HFX3D_REVIEW_ROOT "<SHARED>\reviews"
+setx HFX3D_REVIEW_ROOT "<WORK>\reviews"
 ```
 
 Close and reopen CloudCompare. Your name keeps reviews separate from everyone else's.
@@ -118,15 +118,15 @@ You can also flag an instance `bad_segmentation` / `wrong_class` / `other` if th
 
 **Workflow:**
 
-1. **Download review cloud** from the AI server to `<SHARED>\review_clouds\<split>\`
-2. **Open in CloudCompare**: File → Open → `<SHARED>\review_clouds\<split>\HFX_BLDxxx_ZEB_CLEAN.laz`
+1. **Download review cloud** from the AI server to `<WORK>\review_clouds\<split>\`
+2. **Open in CloudCompare**: File → Open → `<WORK>\review_clouds\<split>\HFX_BLDxxx_ZEB_CLEAN.laz`
 3. Click the cloud in the tree (left), then click **Functional Review** button
 4. Work through instances (left panel):
    - Click an instance row → highlights in 3D, attributes load on right
    - Tick/untick attributes or use **Accept all / Reject all / Reset to pipeline**
    - Add a **Flag** or **Note** if needed
    - Click **Confirm ✓ & Next** to move on
-5. Click **Save Review** often — it writes to `<SHARED>\reviews\<building>__<you>.review.json`
+5. Click **Save Review** often — it writes to `<WORK>\reviews\<building>__<you>.review.json`
 
 **Tips:**
 - Filter by class or tick "unreviewed" to jump to what needs work
@@ -147,8 +147,8 @@ All of one reviewer's buildings:
 ```powershell
 python review_admin.py export-all --reviewer your-name `
   --func-root    "<FUNC_ROOT>" `
-  --reviews-root "<SHARED>\reviews" `
-  --out-root     "<SHARED>\functional_labels_reviewed"
+  --reviews-root "<WORK>\reviews" `
+  --out-root     "<WORK>\functional_labels_reviewed"
 ```
 
 One building:
@@ -156,8 +156,8 @@ One building:
 ```powershell
 python review_admin.py export `
   --func   "<FUNC_ROOT>\train\HFX_BLD001_ZEB_CLEAN.h5" `
-  --review "<SHARED>\reviews\HFX_BLD001_ZEB_CLEAN__your-name.review.json" `
-  --out    "<SHARED>\functional_labels_reviewed\train"
+  --review "<WORK>\reviews\HFX_BLD001_ZEB_CLEAN__your-name.review.json" `
+  --out    "<WORK>\functional_labels_reviewed\train"
 ```
 
 Watch the two easy mistakes: `--func` is the pipeline **`.h5`** (not the review
