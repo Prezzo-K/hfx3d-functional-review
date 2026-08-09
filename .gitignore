@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyCharm
+.idea/
+
+# Data / large artifacts (keep these on the shared drive, not in git)
+*.laz
+*.las
+*.ply
+*.h5
+reviews/
+review_clouds/
+functional_labels_reviewed/
