@@ -53,8 +53,9 @@ privacy_screening, circulation, illumination, surveillance`
 
 ### Workflow
 
-1. **Download** a review cloud from the server (`.laz` file)
-   - Ask your team where the server is
+1. **Download** a review cloud from the server:
+   - **AI server path:** `/data/images/lidar_data/Functional_Attribute/review_clouds`
+   - Download the `.laz` file for your assigned building
 
 2. **Open in CloudCompare**: File → Open → `HFX_BLDxxx_ZEB_CLEAN.laz`
 
@@ -81,11 +82,13 @@ privacy_screening, circulation, illumination, surveillance`
 
 ## After reviewing — upload your JSON
 
-When you finish a building, your edits are saved as a JSON file locally. Upload it to the server so the team can process it.
+When you finish a building, your edits are saved as a JSON file locally. Upload it back to the AI server.
 
 **Your review file is:** `<building-name>__<your-name>.json`
 
-Ask your team where to upload it (usually a shared folder or the AI server).
+**Upload to:** `/data/images/lidar_data/Functional_Attribute/reviews`
+
+Ask your team if you need help accessing the server.
 
 ---
 
