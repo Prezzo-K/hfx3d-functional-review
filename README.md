@@ -1,372 +1,205 @@
-# HFX3D Functional-Attribute Review — Team Pipeline
+# HFX3D functional-attribute review
 
-Human-in-the-loop validation of the automatic functional-attribute labels, done
-**inside CloudCompare**. Reviewers open one point cloud per building, click an
-instance, and confirm/correct its 15 functional attributes. Nothing in the
-original dataset is ever modified — every decision is written to a separate
-review file and later exported to a reviewed dataset.
+This is how we check and fix the automatic functional attributes on the HFX3D
+buildings. You review inside **CloudCompare** — open a building, click an
+instance, and confirm or correct its 15 attributes. Your edits go into your own
+review file; the original data is never touched. When a building is done we
+export a reviewed `.h5` for training.
+
+Flow:
 
 ```
- pipeline output (functional_labels/*.h5)
-            │
-   [ADMIN] build_review_cloud.py  ─────────►  review_clouds/<split>/*.laz   (open in CloudCompare)
-            │
-   [REVIEWER] CloudCompare + "Functional Review" panel
-            │  edits, per person
-            ▼
-        reviews/<building>__<reviewer>.review.json      (your decisions — safe, resumable)
-            │
-   [ADMIN] export_reviewed.py  ─────────────►  functional_labels_reviewed/<split>/*.h5   (for training/eval)
+functional_labels/*.h5  (pipeline)
+        │  build the review cloud
+        ▼
+review_clouds/<split>/*.laz   ── open in CloudCompare, review with the panel ──►  reviews/<building>__<you>.review.json
+                                                                                          │  export
+                                                                                          ▼
+                                                                          functional_labels_reviewed/<split>/*.h5
 ```
 
-There are **two roles**: an **Admin** who sets the shared data up once, and
-**Reviewers** who do the labelling. Follow the section for your role.
+Two roles: **Admin** (sets things up, builds the clouds, runs the export) and
+**Reviewer** (does the labelling). Jump to your part.
 
----
-
-## 0. Fixed vocabulary (what the columns mean)
-
-15 functional attributes, in this fixed order:
-
+The 15 attributes, in order:
 `load_bearing, thermal_envelope, vegetation_support, operable, solar_shading,
 ventilation, natural_lighting, access, drainage, fall_protection, aesthetic,
-privacy_screening, circulation, illumination, surveillance`
+privacy_screening, circulation, illumination, surveillance`.
 
-Instance flags (one per instance, optional): `bad_segmentation`, `wrong_class`,
-`other`. Use these when the *instance itself* is wrong (bad geometry / wrong
-semantic class), not the attributes.
-
----
-
-## 1. Where everything lives (canonical locations)
-
-Pick a **shared drive** everyone can reach (network share or synced folder).
-In the examples below it is `S:\HFX3D`. Replace `S:\HFX3D` with your real
-shared path everywhere. The layout is:
-
-```
-S:\HFX3D\
-├── review_clouds\           # the LAZ clouds reviewers open (built by Admin)
-│   ├── train\  HFX_BLD001_ZEB_CLEAN.laz ...
-│   ├── val\    ...
-│   └── test\   ...
-├── reviews\                 # review JSON files, one per building PER reviewer
-│   ├── HFX_BLD001_ZEB_CLEAN__abdi.review.json
-│   └── HFX_BLD001_ZEB_CLEAN__sara.review.json
-└── functional_labels_reviewed\   # exported reviewed .h5 (built by Admin)
-    ├── train\  HFX_BLD001_ZEB_CLEAN.h5 ...
-    └── ...
-```
-
-Source data used only by the Admin build step (can stay on the Admin machine):
-
-```
-functional_labels\<split>\<building>.h5        # pipeline output (per-instance attributes)
-instances_vis\<split>\<building>_instances_vis.ply   # cloud carrying per-point instance ids
-```
-
-The **tools** (Python scripts) all live in **one self-contained repo**:
-
-```
-C:\Users\<you>\PycharmProjects\hfx3d-functional-review\
-├── review_admin.py           # Admin: ONE command → build clouds / export (recommended)
-├── cc_functional_review.py   # Reviewer: the CloudCompare panel (add this folder to CC)
-├── build_review_cloud.py     # (used by review_admin; also runnable directly)
-├── export_reviewed.py        # (used by review_admin; also runnable directly)
-├── functional.py             # shared library
-├── cloud_io.py               # shared library (LAS/PLY reader)
-├── review_editor.py          # optional standalone table editor (no CloudCompare)
-├── requirements.txt
-└── README.md                 # this file
-```
-
-Every script adds its own folder to `sys.path`, so you can run them from any
-working directory and `import functional` will never fail — even if you `cd`
-elsewhere first.
-
-> **Two argument gotchas that cause errors:**
-> `--func` is always the pipeline **`.h5`** (`functional_labels/<split>/<b>.h5`),
-> **never** the review `.laz`. `--out` may be a **folder** (the filename is
-> derived) or a full `.h5` path.
+You can also flag an instance `bad_segmentation` / `wrong_class` / `other` when
+the *instance itself* looks wrong (not the attributes). Flags are just notes for
+us — they don't drop or change anything on export.
 
 ---
 
-## 2. ADMIN — one-time setup
+## Paths — set these to yours
 
-### 2.1 Python environment (Admin machine only)
+The examples below use my machine. **Change the parts marked `← change`.**
 
-The build/export scripts run in this repo's virtual environment (Python 3.10+):
+```
+Tools (this repo):   C:\Users\s4824030\PycharmProjects\hfx3d-functional-review        ← change to where you cloned it
+Pipeline output:     C:\Users\s4824030\PycharmProjects\HFX3D_functional_attribute_refinement\HFX3D_functional_attribute_refinement\results\functional_labels   ← change
+Instance clouds:     C:\Users\s4824030\PycharmProjects\hfx3d-benchmark\HFX3D_Instance+Semantic\instances_vis                                                     ← change (Admin only)
+Shared data folder:  <put this on a drive everyone can reach>\HFX3D        ← change (e.g. a network share)
+```
+
+The **shared data folder** holds what the team passes around. There's a ready-made
+copy in this repo under `data\` you can drop onto the share as a starting point:
+
+```
+<shared>\HFX3D\
+  review_clouds\<split>\*.laz              reviewers open these
+  reviews\<building>__<reviewer>.json      one file per building per reviewer
+  functional_labels_reviewed\<split>\*.h5  exported result (for training)
+  functional_labels\<split>\*.h5           pipeline output (Admin needs it to export)
+```
+
+---
+
+## Admin — one-time
+
+1. Make the environment (in the repo folder):
+
+   ```powershell
+   cd C:\Users\s4824030\PycharmProjects\hfx3d-functional-review     ← change
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+2. Build a review cloud for every building. This bakes the current attributes
+   into one `.laz` per building that reviewers open:
+
+   ```powershell
+   python review_admin.py build-all `
+     --inst-root "C:\Users\s4824030\PycharmProjects\hfx3d-benchmark\HFX3D_Instance+Semantic\instances_vis" `
+     --func-root "C:\Users\s4824030\PycharmProjects\HFX3D_functional_attribute_refinement\HFX3D_functional_attribute_refinement\results\functional_labels" `
+     --out-root  "<shared>\HFX3D\review_clouds"
+   ```
+
+3. Put `review_clouds\` on the shared drive and tell the team the path.
+
+That's it until reviews come back — then see **Export** at the bottom.
+
+---
+
+## Reviewer — one-time (do this once, it stays set up)
+
+1. **CloudCompare 2.13 with the Python plugin.** Install CloudCompare 2.13 and,
+   in the installer, tick **Python plugin**. Open it once — you should see a
+   Python console/menu. (No console = re-run the installer and enable it.)
+
+2. **Add the review panel as a button.** Copy this repo's folder to your PC
+   (e.g. `C:\HFX3D\tools\hfx3d-functional-review`), then in CloudCompare open the
+   Python plugin settings and add that folder as a custom-plugins path. Restart
+   CloudCompare — a **Functional Review** button appears. (If your build has no
+   such setting, use the console way at the bottom.)
+
+3. **Set your name and the shared folder** (once, in a terminal):
+
+   ```powershell
+   setx HFX3D_REVIEWER "abdi"                      ← change to your name
+   setx HFX3D_REVIEW_ROOT "<shared>\HFX3D\reviews"  ← change to the shared reviews folder
+   ```
+
+   Close and reopen CloudCompare afterwards (it reads these at startup). Your
+   name keeps your review files separate from everyone else's.
+
+---
+
+## Reviewer — doing a building
+
+1. In CloudCompare: **File → Open** →
+   `<shared>\HFX3D\review_clouds\<split>\HFX_BLDxxx_ZEB_CLEAN.laz`.
+2. Click the cloud in the tree (left) to select it, then click **Functional
+   Review**. The panel opens.
+3. Work down the **instance list** on the left (filter by class, or tick
+   "unreviewed"). Click a row — that instance lights up in the 3D view and its
+   attributes load on the right.
+4. Judge it, then tick/untick attributes (or **Accept all / Reject all / Reset
+   to pipeline**). Add a **Flag** or **Note** if useful. Hit **Confirm ✓ & Next**
+   to move on. (Any edit also counts it as reviewed — the counter is just so we
+   can see how far along a building is.)
+5. Click **Save Review** now and then, and before you close. It writes
+   `<shared>\HFX3D\reviews\<building>__<you>.review.json`.
+
+Splitting work: either one building per person, or several people on the same
+building — everyone writes their own `__<name>` file, so nobody overwrites
+anyone.
+
+**Comparing while you review:** use *Colour by* at the top —
+`val: <attr>` shows the current decision for that attribute across the whole
+building (good for spotting outliers), `conf: <attr>` shows the pipeline's
+confidence (near 0.5 = it was unsure, so your call matters most).
+
+---
+
+## Admin — export the reviewed dataset
+
+When reviews are in, merge each reviewer's JSON with the pipeline `.h5` into a
+reviewed `.h5`. Originals aren't touched — the reviewed file just adds your
+decisions next to the pipeline ones.
+
+All of one reviewer's buildings at once:
 
 ```powershell
-cd C:\Users\<you>\PycharmProjects\hfx3d-functional-review
-python -m venv .venv                     # if it doesn't exist yet
-.venv\Scripts\activate
-pip install -r requirements.txt
+python review_admin.py export-all --reviewer abdi `
+  --func-root    "C:\Users\s4824030\PycharmProjects\HFX3D_functional_attribute_refinement\HFX3D_functional_attribute_refinement\results\functional_labels" `
+  --reviews-root "<shared>\HFX3D\reviews" `
+  --out-root     "<shared>\HFX3D\functional_labels_reviewed"
 ```
 
-(`lazrs` gives compressed `.laz`; without it you get larger `.las` — still works.)
-
-### 2.2 Build the review clouds for every building
-
-This bakes each building's current attributes into one LAZ. **Always keep the
-confidence fields** — the panel needs them (`review_admin` includes them by
-default; `build_review_cloud.py` needs `--with-conf`).
-
-**Recommended — one command for all buildings:**
+One building:
 
 ```powershell
-.venv\Scripts\python.exe review_admin.py build-all `
-  --inst-root "C:\...\HFX3D_Instance+Semantic\instances_vis" `
-  --func-root "C:\...\results\functional_labels" `
-  --out-root  "S:\HFX3D\review_clouds"
+python review_admin.py export `
+  --func   "...\functional_labels\train\HFX_BLD001_ZEB_CLEAN.h5" `
+  --review "<shared>\HFX3D\reviews\HFX_BLD001_ZEB_CLEAN__abdi.review.json" `
+  --out    "<shared>\HFX3D\functional_labels_reviewed\train"
 ```
 
-Single building (equivalent, explicit):
+Watch the two easy mistakes: `--func` is the pipeline **`.h5`** (not the review
+`.laz`), and `--out` can be a folder (the filename is filled in) or a full path.
 
-```powershell
-.venv\Scripts\python.exe build_review_cloud.py `
-  --orig "C:\...\instances_vis\train\HFX_BLD001_ZEB_CLEAN_instances_vis.ply" `
-  --func "C:\...\functional_labels\train\HFX_BLD001_ZEB_CLEAN.h5" `
-  --out  "S:\HFX3D\review_clouds\train\HFX_BLD001_ZEB_CLEAN.laz" `
-  --with-conf
-```
-
-All buildings at once (edit the three roots, then paste into PowerShell):
-
-```powershell
-$INST = "C:\...\HFX3D_Instance+Semantic\instances_vis"
-$FUNC = "C:\...\results\functional_labels"
-$OUT  = "S:\HFX3D\review_clouds"
-Get-ChildItem $INST -Recurse -Filter *_instances_vis.ply | ForEach-Object {
-  $split = $_.Directory.Name
-  $stem  = $_.BaseName -replace "_instances_vis$",""
-  $func  = Join-Path $FUNC "$split\$stem.h5"
-  if (Test-Path $func) {
-    .venv\Scripts\python.exe build_review_cloud.py `
-      --orig $_.FullName --func $func `
-      --out (Join-Path $OUT "$split\$stem.laz") --with-conf
-  }
-}
-```
-
-Copy the resulting `review_clouds\` to the shared drive (`S:\HFX3D\review_clouds`).
-
-### 2.3 Tell reviewers what to install
-
-Send every reviewer **Section 3** below, plus the shared path `S:\HFX3D`.
+The reviewed `.h5` has the full per-instance vectors for **every** instance:
+`functional_attribute_vector` (pipeline, kept) and
+`functional_attribute_vector_human` (what training should read), plus
+`review_status`, `instance_flag`, `review_note`. Unreviewed instances just carry
+the pipeline vector.
 
 ---
 
-## 3. REVIEWER — one-time setup (permanent, per person)
+## What changes, what doesn't
 
-Do this **once** on each reviewer's PC. After it, reviewing is just: open a
-cloud → click the toolbar button → work.
-
-### 3.1 Install CloudCompare 2.13 **with the Python plugin**
-
-1. Download CloudCompare 2.13 (Windows) from https://cloudcompare.org.
-2. Run the installer and **tick "Python plugin" (CloudCompare Python Runtime)**
-   in the components list. Finish the install.
-3. Launch CloudCompare. You should see a **Python** entry (console/editor). If
-   you do not, re-run the installer and enable the plugin.
-
-### 3.2 Make the "Functional Review" button permanent
-
-So it appears as a real toolbar/menu action (no typing in the console each time):
-
-1. Put the `hfx3d-functional-review` folder on the reviewer PC (e.g.
-   `C:\HFX3D\tools\hfx3d-functional-review\`). Only `cc_functional_review.py`
-   is needed by CloudCompare, but keeping the whole folder is fine.
-2. In CloudCompare open the **Python plugin settings** (the Python plugin
-   toolbar button → its settings/gear, labelled something like *"Manage custom
-   Python plugins / scripts path"*).
-3. Add the folder `C:\HFX3D\tools` as a custom-plugins path.
-4. **Restart CloudCompare.** A **"Functional Review"** action now appears in the
-   Python plugin menu/toolbar.
-
-> If your build has no such setting, use the console fallback in Section 6.
-
-### 3.3 Set your identity and the shared folder (permanent env vars)
-
-These tell the panel **who you are** (stamped into your files, keeps them
-separate from teammates') and **where to write reviews**. Set once via `setx`
-in a terminal (or System Properties → Environment Variables):
-
-```powershell
-setx HFX3D_REVIEWER "abdi"
-setx HFX3D_REVIEW_ROOT "S:\HFX3D\reviews"
-```
-
-- `HFX3D_REVIEWER` — your short name (lowercase, no spaces is easiest).
-- `HFX3D_REVIEW_ROOT` — the shared reviews folder (must be the same for everyone).
-
-**Close and reopen CloudCompare** after `setx` (env vars load at startup).
+- Never touched: the original `HFX3D_Instance+Semantic\*.h5` and the pipeline
+  `functional_labels\*.h5`.
+- Your edits live in your `reviews\...json`.
+- The training file is `functional_labels_reviewed\<split>\<building>.h5`.
+- In CloudCompare, editing only changes the on-screen colours and your review
+  file — the `.laz` on disk isn't rewritten.
 
 ---
 
-## 4. REVIEWER — daily workflow
+## If something's off
 
-1. In CloudCompare: **File → Open** the building from
-   `S:\HFX3D\review_clouds\<split>\HFX_BLDxxx_ZEB_CLEAN.laz`.
-2. **Click the cloud** in the DB Tree (left) to select it.
-3. Click the **Functional Review** toolbar button. The panel opens.
-4. Review, one instance at a time:
-   - The **left list** shows every instance (`#id · class · N on · ✓ reviewed · ⚑ flagged`).
-     Filter with the **class** dropdown, **unreviewed** / **flagged** checkboxes,
-     or the **search** box.
-   - **Click a list row** → that instance is **highlighted in the 3D view** and
-     its attributes load on the right.
-   - Judge it in 3D, then in the attribute table **tick/untick** each attribute,
-     or use **Accept all / Reject all / Reset to pipeline**. Non-applicable
-     attributes are greyed but you can still tick them.
-   - Optionally set a **Flag** (bad segmentation / wrong class) and a **Note**.
-   - Click **Confirm ✓ & Next** to mark it reviewed and jump to the next
-     unreviewed instance. (Any edit also auto-marks it reviewed.)
-5. Click **Save Review** regularly (and before closing). Your file is written to
-   `S:\HFX3D\reviews\<building>__<yourname>.review.json`.
+- *"cloud has no instance_id / val_* field"* → wrong file open; open a
+  `review_clouds\...laz`.
+- Clicking a **point** doesn't select → use the **list** on the left, that's the
+  intended way (point-picking is finicky across CC builds).
+- Colours don't update after an edit → set *Colour by* to `val: <that attribute>`.
+- **Functional Review** button missing → finish the plugin-path step, restart CC,
+  or use the console way below.
+- Reviews save as `unassigned` or to the wrong place → `HFX3D_REVIEWER` /
+  `HFX3D_REVIEW_ROOT` aren't set; redo the `setx` step and restart CloudCompare.
+- `h5py` errors *inside* CloudCompare → you don't need it there; it's only for the
+  Admin build/export scripts.
 
-The counter (bottom-left) shows `reviewed / total` so you can see progress.
-"Reviewed" is only a coverage tracker — it does **not** change any attribute.
-
-**Splitting work across the team:** either assign one building per person, or
-have several people review the same building — each person's decisions go to
-their own `__<name>.review.json`, so there is no clobbering.
-
----
-
-## 5. Comparing / QC while reviewing
-
-Use the **Colour by** dropdown at the top of the panel:
-
-- **Highlight selected** — the picked instance is bright, everything else dim
-  (default; best for locating the instance you're judging).
-- **val: `<attribute>`** — colours the whole building by the **current decision**
-  (1 = on) for that attribute. Great for spotting outliers ("why is this wall
-  marked operable?").
-- **conf: `<attribute>`** — colours by the **pipeline confidence** (0→1). Compare
-  `val` vs `conf`: where confidence is near 0.5 the pipeline was unsure and your
-  judgement matters most.
-
-The list's `N on` count and, after export, the `changed` field let you see where
-humans disagreed with the pipeline.
-
-To compare **two reviewers** on the same building: export each of their review
-files (Section 7) and diff the `functional_attribute_vector_human` arrays.
-
----
-
-## 6. Console fallback (if the toolbar button isn't set up)
-
-Open the CloudCompare **Python console**, select the cloud, and run:
+**Console way to launch the panel** (if the button isn't set up):
 
 ```python
-import sys; sys.path.append(r"C:\HFX3D\tools\hfx3d-functional-review")
+import sys; sys.path.append(r"C:\HFX3D\tools\hfx3d-functional-review")   # ← change
 import cc_functional_review as R
 R.main()
 ```
 
-To reload after the script is updated:
-
-```python
-import importlib, cc_functional_review as R
-importlib.reload(R); R.main()
-```
-
----
-
-## 7. ADMIN — export the reviewed dataset
-
-When a building's review is done, merge the reviewer's JSON with the pipeline
-`.h5` into a reviewed `.h5` (originals are never touched).
-
-**Recommended — all of one reviewer's files at once:**
-
-```powershell
-.venv\Scripts\python.exe review_admin.py export-all --reviewer abdi `
-  --func-root    "C:\...\results\functional_labels" `
-  --reviews-root "S:\HFX3D\reviews" `
-  --out-root     "S:\HFX3D\functional_labels_reviewed"
-```
-
-Single building (explicit; `--out` may be a file or a folder):
-
-```powershell
-.venv\Scripts\python.exe export_reviewed.py `
-  --func   "C:\...\functional_labels\train\HFX_BLD001_ZEB_CLEAN.h5" `
-  --review "S:\HFX3D\reviews\HFX_BLD001_ZEB_CLEAN__abdi.review.json" `
-  --out    "S:\HFX3D\functional_labels_reviewed\train"
-```
-
-Batch all of one reviewer's files:
-
-```powershell
-$FUNC = "C:\...\results\functional_labels"
-$REV  = "S:\HFX3D\reviews"
-$OUT  = "S:\HFX3D\functional_labels_reviewed"
-Get-ChildItem $REV -Filter *__abdi.review.json | ForEach-Object {
-  $stem = $_.BaseName -replace "__abdi\.review$",""
-  $func = Get-ChildItem $FUNC -Recurse -Filter "$stem.h5" | Select-Object -First 1
-  if ($func) {
-    $split = $func.Directory.Name
-    .venv\Scripts\python.exe export_reviewed.py `
-      --func $func.FullName --review $_.FullName `
-      --out (Join-Path $OUT "$split\$stem.h5")
-  }
-}
-```
-
-### What the reviewed `.h5` contains
-
-Same schema as the pipeline output (same instance order), **plus** the human layer:
-
-| dataset | meaning |
-|---|---|
-| `functional_attribute_vector` | original **pipeline** suggestion (kept for provenance) |
-| `functional_attribute_vector_human` | **reviewed decision** — use this for training/eval |
-| `review_status` | `reviewed` / `unreviewed` per instance |
-| `instance_flag` | `bad_segmentation` / `wrong_class` / `other` / empty |
-| `review_note` | free-text note |
-| `functional_attribute_confidence`, `applicable_mask`, `instance_id`, `semantic_class`, … | copied through unchanged |
-
-Downstream code reads **`functional_attribute_vector_human`**.
-
-### Re-baking a review cloud (optional)
-
-To colour a review cloud by the *edited* values (e.g. for a QA screenshot), run
-`build_review_cloud.py` again with `--review <that json>` — it overlays the human
-decisions onto the `val_*` fields.
-
----
-
-## 8. Golden rules (what changes, what never does)
-
-- **Never modified:** `HFX3D_Instance+Semantic\*.h5` (points/semantic/instance)
-  and `functional_labels\*.h5` (pipeline output).
-- **Your edits live in:** `reviews\<building>__<you>.review.json` (written on Save).
-- **The training file is:** `functional_labels_reviewed\<split>\<building>.h5`
-  (created by `export_reviewed.py`).
-- In CloudCompare, editing changes only the on-screen colours + your review file;
-  the `.laz` on disk is not rewritten unless the Admin re-bakes it.
-
----
-
-## 9. Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| Panel says *"cloud has no instance_id / val_* field"* | You opened the wrong cloud. Open a `review_clouds\...laz` built with `--with-conf`. |
-| Clicking a **point** doesn't select an instance | Known: point-picking varies by build. Use the **left list** instead (that's the intended way). |
-| Colours don't refresh after an edit | Set **Colour by** to `val: <that attribute>`; it recolours on edit. Otherwise your edit is still saved. |
-| "Functional Review" button missing | Finish Section 3.2, restart CloudCompare, or use the console fallback (Section 6). |
-| Reviews saving to the wrong place / name is "unassigned" | `HFX3D_REVIEWER` / `HFX3D_REVIEW_ROOT` not set — redo Section 3.3 and **restart CloudCompare**. |
-| `h5py` errors inside CloudCompare | Not needed there — the panel uses only NumPy. `h5py` is only for the Admin build/export scripts. |
-
----
-
-## 10. Quick reference
-
-**Reviewer, every session:** open `review_clouds\<split>\<building>.laz` → select it →
-**Functional Review** → click list rows, edit, **Confirm ✓ & Next** → **Save Review**.
-
-**Admin, per batch:** `build_review_cloud.py --with-conf` (make LAZs) →
-reviewers work → `export_reviewed.py` (make reviewed `.h5`).
+To reload after the script changes: `import importlib; importlib.reload(R); R.main()`.
