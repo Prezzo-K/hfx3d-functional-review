@@ -74,10 +74,9 @@ privacy_screening, circulation, illumination, surveillance`
 
 ### Tips
 
-- Filter by class or tick "unreviewed" to jump to what needs work
+- Filter by class or instance ID, or tick "unreviewed" to jump to what needs work
 - Use *Colour by* → `val: <attr>` to spot outliers across the building
 - Use *Colour by* → `conf: <attr>` to see pipeline confidence (0.5 = very unsure, your call matters most)
-- **Splitting work**: one building per person, or several people on the same building — everyone writes their own edits
 
 ---
 
