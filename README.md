@@ -30,8 +30,10 @@ This repo contains **tools only**. Data lives in your working folder (`<WORK>`) 
 ### Required (you must provide these)
 
 - **`<FUNC_ROOT>`** — functional attribute labels (HDF5 files from the pipeline)
-  - Admin: Generate or receive from pipeline
-  - Reviewers: Download from AI server → place in your working folder
+  - **Download from:** https://drive.google.com/drive/u/2/folders/1oZznQD63gJPRiqzEvqFvXkbmp7ALylXY
+  - Extract to your working folder or keep elsewhere on your PC
+  - Admin: Use this path when building review clouds
+  - Reviewers: Keep locally for `HFX3D_REVIEW_ROOT` environment variable
 
 - **`<INST_ROOT>`** — instance point clouds (geometry, HDF5 or LAZ)
   - Located in your `hfx3d-benchmark` repo checkout
