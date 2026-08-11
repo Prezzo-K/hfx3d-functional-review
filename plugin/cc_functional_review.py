@@ -15,7 +15,7 @@ afterwards. Writing the .h5 needs h5py importable from CloudCompare's Python
 writes the json and tells you so instead of failing silently.
 
 Run from the CloudCompare Python console:
-    import sys; sys.path.append(r"C:\\path\\to\\hfx3d-functional-review")
+    import sys; sys.path.append(r"C:\\path\\to\\hfx3d-functional-review\\plugin")
     import cc_functional_review as R; R.main()
 """
 from __future__ import annotations
@@ -38,8 +38,42 @@ try:
 except Exception:                     # allows import outside CloudCompare
     pycc = None
 
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtGui import QColor
+# Qt binding must match CloudCompare's own Qt, loaded in the same process:
+# CC 2.14 is built on Qt6 (use PyQt6), CC 2.13 on Qt5 (use PyQt5). Loading the
+# wrong major version pulls a second, incompatible Qt into the process and
+# crashes the whole app on load — so prefer PyQt6 and fall back to PyQt5.
+try:
+    from PyQt6 import QtCore, QtWidgets
+    from PyQt6.QtGui import QColor
+    _QT6 = True
+except Exception:
+    from PyQt5 import QtCore, QtWidgets
+    from PyQt5.QtGui import QColor
+    _QT6 = False
+
+# PyQt6 scopes its enums (Qt.CheckState.Checked); PyQt5 does not (Qt.Checked).
+# Normalise the handful this panel uses so the code below reads the same on both.
+_Qt = QtCore.Qt
+if _QT6:
+    ALIGN_CENTER = _Qt.AlignmentFlag.AlignCenter
+    CHECKED, UNCHECKED = _Qt.CheckState.Checked, _Qt.CheckState.Unchecked
+    ITEM_CHECKABLE = _Qt.ItemFlag.ItemIsUserCheckable
+    ITEM_ENABLED = _Qt.ItemFlag.ItemIsEnabled
+    USER_ROLE = _Qt.ItemDataRole.UserRole
+    STAY_ON_TOP = _Qt.WindowType.WindowStaysOnTopHint
+    NO_EDIT = QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+    HDR_STRETCH = QtWidgets.QHeaderView.ResizeMode.Stretch
+    MB = QtWidgets.QMessageBox.StandardButton
+else:
+    ALIGN_CENTER = _Qt.AlignCenter
+    CHECKED, UNCHECKED = _Qt.Checked, _Qt.Unchecked
+    ITEM_CHECKABLE = _Qt.ItemIsUserCheckable
+    ITEM_ENABLED = _Qt.ItemIsEnabled
+    USER_ROLE = _Qt.UserRole
+    STAY_ON_TOP = _Qt.WindowStaysOnTopHint
+    NO_EDIT = QtWidgets.QAbstractItemView.NoEditTriggers
+    HDR_STRETCH = QtWidgets.QHeaderView.Stretch
+    MB = QtWidgets.QMessageBox
 
 FLAGS = ["", "bad_segmentation", "wrong_class", "other"]
 SEM_NAMES = ["wall", "window", "door", "balcony", "vegetation", "stairs",
@@ -49,11 +83,17 @@ SEM_NAMES = ["wall", "window", "door", "balcony", "vegetation", "stairs",
 # HFX3D_REVIEW_ROOT : shared folder for review JSON files (e.g. a network drive)
 # HFX3D_EXPORT_ROOT : shared folder for reviewed .h5 files (defaults to REVIEW_ROOT)
 # HFX3D_REVIEWER    : this person's name, stamped into their review files
-_FALLBACK_REVIEW_ROOT = Path(
-    r"C:/Users/s4824030/PycharmProjects/HFX3D_functional_attribute_refinement"
-    r"/HFX3D_functional_attribute_refinement/results/reviews")
-REVIEW_ROOT = Path(os.environ.get("HFX3D_REVIEW_ROOT", str(_FALLBACK_REVIEW_ROOT)))
-EXPORT_ROOT = Path(os.environ.get("HFX3D_EXPORT_ROOT", str(REVIEW_ROOT)))
+# If HFX3D_REVIEW_ROOT isn't set, fall back to a per-user folder that exists on
+# any machine (not a hardcoded developer path) so Save never silently writes
+# somewhere unexpected. Set the env vars (see README) to control this properly.
+_FALLBACK_REVIEW_ROOT = Path.home() / "HFX3D_reviews"
+_REVIEW_ROOT_ENV = os.environ.get("HFX3D_REVIEW_ROOT", "").strip()
+if not _REVIEW_ROOT_ENV:
+    print("HFX3D_REVIEW_ROOT is not set — reviews will be written to",
+          _FALLBACK_REVIEW_ROOT, "(set the env var to change this).")
+REVIEW_ROOT = Path(_REVIEW_ROOT_ENV) if _REVIEW_ROOT_ENV else _FALLBACK_REVIEW_ROOT
+_EXPORT_ROOT_ENV = os.environ.get("HFX3D_EXPORT_ROOT", "").strip()
+EXPORT_ROOT = Path(_EXPORT_ROOT_ENV) if _EXPORT_ROOT_ENV else REVIEW_ROOT
 ENV_REVIEWER = os.environ.get("HFX3D_REVIEWER", "").strip()
 
 _VAL_RE = re.compile(r"^val_(\d+)_(.+)$")
@@ -64,7 +104,7 @@ _PANEL = None                          # keep a global ref so the panel isn't GC
 
 def _building_stem(name: str) -> str:
     name = Path(name).stem                       # drop any .laz/.las/.ply extension
-    for suffix in ("_instances_vis", "_instances", "_vis"):
+    for suffix in ("_instances_vis", "_instances", "_vis", "_small"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name
@@ -85,6 +125,17 @@ def export_path_for(stem: str, reviewer: str) -> Path:
 
 
 # ── data pulled from the loaded cloud's scalar fields ────────────────────────
+
+def _sf_np(cloud, idx):
+    """Return a scalar field as a writable NumPy array.
+
+    Across CloudCompare builds ``ScalarField.asArray()`` returns either a real
+    numpy array or a ``cccorelib.ScalarFieldView``; ``np.asarray`` normalises
+    both to an ndarray that shares the field's memory, so in-place writes still
+    update the cloud (used for live re-colouring on edit / highlight).
+    """
+    return np.asarray(cloud.getScalarField(idx).asArray())
+
 
 class CloudModel:
     def __init__(self, cloud):
@@ -114,19 +165,18 @@ class CloudModel:
 
         # int32 is enough for any instance id and halves this copy's memory
         # vs int64 — real savings on 20-60M point buildings
-        self._inst = cloud.getScalarField(self.inst_idx).asArray().astype(np.int32)
+        self._inst = _sf_np(cloud, self.inst_idx).astype(np.int32)
         uids, first, counts = np.unique(self._inst, return_index=True, return_counts=True)
         keep = uids >= 0
         self.ids = uids[keep].tolist()
         self._first = {int(u): int(f) for u, f in zip(uids[keep], first[keep])}
         self._count = {int(u): int(c) for u, c in zip(uids[keep], counts[keep])}
 
-        self.cur = {j: cloud.getScalarField(self.val_sf[j]).asArray() for j in range(self.n_attr)}
-        self.conf = {j: cloud.getScalarField(self.conf_sf[j]).asArray()
-                     for j in self.conf_sf}
-        sem = cloud.getScalarField(self.sem_idx).asArray() if self.sem_idx is not None else None
+        self.cur = {j: _sf_np(cloud, self.val_sf[j]) for j in range(self.n_attr)}
+        self.conf = {j: _sf_np(cloud, self.conf_sf[j]) for j in self.conf_sf}
+        sem = _sf_np(cloud, self.sem_idx) if self.sem_idx is not None else None
         self.sem_id = {iid: int(sem[self._first[iid]]) for iid in self.ids} if sem is not None else {}
-        pur = cloud.getScalarField(self.purity_idx).asArray() if self.purity_idx is not None else None
+        pur = _sf_np(cloud, self.purity_idx) if self.purity_idx is not None else None
         self.purity = {iid: float(pur[self._first[iid]]) for iid in self.ids} if pur is not None else {}
 
         self._hl_idx = self._ensure_highlight()
@@ -140,7 +190,7 @@ class CloudModel:
             idx = c.addScalarField("review_highlight")
             if idx is None or idx < 0:
                 return None
-            c.getScalarField(idx).asArray()[:] = 0.0
+            _sf_np(c, idx)[:] = 0.0
             return idx
         except Exception as exc:
             print("highlight SF unavailable:", exc)
@@ -180,7 +230,7 @@ class CloudModel:
     def set_highlight(self, iid):
         if self._hl_idx is None:
             return None
-        arr = self.cloud.getScalarField(self._hl_idx).asArray()
+        arr = _sf_np(self.cloud, self._hl_idx)
         arr[:] = 0.0
         arr[self._inst == iid] = 1.0
         return self._hl_idx
@@ -326,7 +376,7 @@ class ReviewPanel(QtWidgets.QDialog):
         self._loading = False
 
         self.setWindowTitle(f"Functional Review — {self.stem}")
-        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(self.windowFlags() | STAY_ON_TOP)
         self.resize(760, 640)
         self._build()
         self._refresh_list()
@@ -405,8 +455,8 @@ class ReviewPanel(QtWidgets.QDialog):
         self.table = QtWidgets.QTableWidget(self.model.n_attr, 3)
         self.table.setHorizontalHeaderLabels(["attribute", "conf", "on"])
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.table.setEditTriggers(NO_EDIT)
+        self.table.horizontalHeader().setSectionResizeMode(0, HDR_STRETCH)
         self.table.itemChanged.connect(self._on_item)
         right.addWidget(self.table, stretch=1)
 
@@ -457,14 +507,14 @@ class ReviewPanel(QtWidgets.QDialog):
             flag = " ⚑" if (self.review.records.get(iid) or {}).get("instance_flag") else ""
             it = QtWidgets.QListWidgetItem(
                 f"{mark}#{iid}  {self.model.cls(iid)}  ({self.model.n_on(iid)} on){flag}")
-            it.setData(QtCore.Qt.UserRole, iid)
+            it.setData(USER_ROLE, iid)
             self.list.addItem(it)
         self._loading = False
 
     def _on_list_sel(self, cur, _prev):
         if self._loading or cur is None:
             return
-        self.select(int(cur.data(QtCore.Qt.UserRole)))
+        self.select(int(cur.data(USER_ROLE)))
 
     # ── selection ───────────────────────────────────────────────────────
     def select(self, iid):
@@ -483,10 +533,10 @@ class ReviewPanel(QtWidgets.QDialog):
             it0 = QtWidgets.QTableWidgetItem(self.model.attr_names[j])
             cf = self.model.confval(iid, j)
             it1 = QtWidgets.QTableWidgetItem("—" if (not appl or cf != cf) else f"{cf:.2f}")
-            it1.setTextAlignment(QtCore.Qt.AlignCenter)
+            it1.setTextAlignment(ALIGN_CENTER)
             it2 = QtWidgets.QTableWidgetItem()
-            it2.setFlags(QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEnabled)
-            it2.setCheckState(QtCore.Qt.Checked if rec["vector_human"][j] else QtCore.Qt.Unchecked)
+            it2.setFlags(ITEM_CHECKABLE | ITEM_ENABLED)
+            it2.setCheckState(CHECKED if rec["vector_human"][j] else UNCHECKED)
             if not appl:
                 for it in (it0, it1, it2):
                     it.setForeground(QColor("#888"))
@@ -502,7 +552,7 @@ class ReviewPanel(QtWidgets.QDialog):
 
     def _sync_list_selection(self, iid):
         for r in range(self.list.count()):
-            if int(self.list.item(r).data(QtCore.Qt.UserRole)) == iid:
+            if int(self.list.item(r).data(USER_ROLE)) == iid:
                 self._loading = True
                 self.list.setCurrentRow(r); self._loading = False
                 return
@@ -517,7 +567,7 @@ class ReviewPanel(QtWidgets.QDialog):
         if self._loading or self.iid is None or item.column() != 2:
             return
         j = item.row()
-        val = 1 if item.checkState() == QtCore.Qt.Checked else 0
+        val = 1 if item.checkState() == CHECKED else 0
         self.review.get(self.iid)["vector_human"][j] = val
         self.review.dirty = True
         sf_idx = self.model.set_value(self.iid, j, val)
@@ -571,11 +621,10 @@ class ReviewPanel(QtWidgets.QDialog):
             r = QtWidgets.QMessageBox.question(
                 self, "Switch reviewer",
                 f"Save {self.reviewer or 'current'}'s edits before switching to {name}?",
-                QtWidgets.QMessageBox.Save | QtWidgets.QMessageBox.Discard
-                | QtWidgets.QMessageBox.Cancel)
-            if r == QtWidgets.QMessageBox.Cancel:
+                MB.Save | MB.Discard | MB.Cancel)
+            if r == MB.Cancel:
                 self.ed_reviewer.setText(self.reviewer); return
-            if r == QtWidgets.QMessageBox.Save:
+            if r == MB.Save:
                 self.review.save()
         self.reviewer = name
         self.review = Review(review_path_for(self.stem, name), self.model, self.stem, reviewer=name)
@@ -595,7 +644,7 @@ class ReviewPanel(QtWidgets.QDialog):
             self._update_list_item(self.iid); self._refresh_counter()
 
     def _nav_next_unreviewed(self):
-        ids = [int(self.list.item(r).data(QtCore.Qt.UserRole)) for r in range(self.list.count())]
+        ids = [int(self.list.item(r).data(USER_ROLE)) for r in range(self.list.count())]
         if not ids:
             return
         start = ids.index(self.iid) if self.iid in ids else -1
@@ -608,7 +657,7 @@ class ReviewPanel(QtWidgets.QDialog):
 
     def _update_list_item(self, iid):
         for r in range(self.list.count()):
-            if int(self.list.item(r).data(QtCore.Qt.UserRole)) == iid:
+            if int(self.list.item(r).data(USER_ROLE)) == iid:
                 mark = "✓ " if self.review.is_reviewed(iid) else "   "
                 flag = " ⚑" if (self.review.records.get(iid) or {}).get("instance_flag") else ""
                 self.list.item(r).setText(
@@ -707,11 +756,10 @@ class ReviewPanel(QtWidgets.QDialog):
         if self.review.dirty:
             r = QtWidgets.QMessageBox.question(
                 self, "Unsaved review", "Save review before closing?",
-                QtWidgets.QMessageBox.Save | QtWidgets.QMessageBox.Discard
-                | QtWidgets.QMessageBox.Cancel)
-            if r == QtWidgets.QMessageBox.Save:
+                MB.Save | MB.Discard | MB.Cancel)
+            if r == MB.Save:
                 self._save()
-            elif r == QtWidgets.QMessageBox.Cancel:
+            elif r == MB.Cancel:
                 ev.ignore(); return
         ev.accept()
 

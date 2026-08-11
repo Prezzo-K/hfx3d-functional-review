@@ -1,11 +1,13 @@
 # Python
 .venv/
+.tools-venv/
 __pycache__/
 *.pyc
 
-# CloudCompare's own per-plugin virtual environment (auto-created in the
-# plugin folder when you say yes to its "create a virtual environment?"
-# prompt — named after the plugin, not .venv)
+# CloudCompare's own per-plugin virtual environment (auto-created when you say
+# yes to its "create a virtual environment?" prompt / via Package Manager —
+# named after the plugin folder, hyphen not underscore)
+functional-review/
 functional_review/
 
 # PyCharm
@@ -18,7 +20,9 @@ data/
 *.ply
 *.h5
 reviews/
+reviewed_h5/
 review_clouds/
+review_clouds_small/
 functional_labels_reviewed/
 
 # Local-only batch-building notes and tools (not part of the shared reviewer
