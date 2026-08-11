@@ -8,7 +8,6 @@ __pycache__/
 
 # Data / large artifacts (keep these on the shared drive, not in git)
 data/
-!data/DATA.md
 *.laz
 *.las
 *.ply
@@ -16,3 +15,13 @@ data/
 reviews/
 review_clouds/
 functional_labels_reviewed/
+
+# Local-only batch-building notes and tools (not part of the shared reviewer
+# setup — cc_functional_review.py is self-contained and doesn't need these;
+# they only matter to whoever builds review clouds from Tao's pipeline .h5)
+BUILDING_REVIEW_CLOUDS.md
+functional.py
+build_review_cloud.py
+review_admin.py
+export_reviewed.py
+review_editor.py

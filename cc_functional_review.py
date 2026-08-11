@@ -2,17 +2,20 @@
 """In-CloudCompare functional-attribute review panel (CloudCompare Python Runtime).
 
 Runs inside CloudCompare (pycc). Reads a review LAZ built by build_review_cloud.py
---with-conf (carries `instance_id`, `val_<attr>`, `conf_<attr>` scalar fields), so
-it needs only NumPy — no h5py inside CloudCompare.
+--with-conf (carries `instance_id`, `semantic_id`, `purity`, `val_<attr>`,
+`conf_<attr>` scalar fields) — needs only NumPy for that part, no h5py.
 
 Team workflow: browse the instance list on the left → the picked instance is
 highlighted in the 3D view and loaded into the editor on the right → tick the
 attributes → "Confirm & Next". "Reviewed" is tracked automatically (any edit or
-Confirm marks it), purely so the team can see coverage. Save writes a review.json
-that export_reviewed.py turns into the reviewed .h5.
+Confirm marks it), purely so the team can see coverage. "Save Review" writes
+BOTH the review.json AND a reviewed .h5 in one action — nothing else to run
+afterwards. Writing the .h5 needs h5py importable from CloudCompare's Python
+(pip install h5py into that environment); if it isn't available, Save still
+writes the json and tells you so instead of failing silently.
 
 Run from the CloudCompare Python console:
-    import sys; sys.path.append(r"C:\\Users\\s4824030\\PycharmProjects\\hfx3d-viewer")
+    import sys; sys.path.append(r"C:\\path\\to\\hfx3d-functional-review")
     import cc_functional_review as R; R.main()
 """
 from __future__ import annotations
@@ -26,6 +29,11 @@ from pathlib import Path
 import numpy as np
 
 try:
+    import h5py
+except Exception:                     # save still works (json-only) without it
+    h5py = None
+
+try:
     import pycc
 except Exception:                     # allows import outside CloudCompare
     pycc = None
@@ -36,14 +44,16 @@ from PyQt5.QtGui import QColor
 FLAGS = ["", "bad_segmentation", "wrong_class", "other"]
 SEM_NAMES = ["wall", "window", "door", "balcony", "vegetation", "stairs",
              "terrain", "roof", "blinds", "other", "column", "arch"]
-# Where review files are written and who is reviewing — both come from
+# Where review files are written and who is reviewing — all come from
 # environment variables so each machine/user is configured once, no code edits.
 # HFX3D_REVIEW_ROOT : shared folder for review JSON files (e.g. a network drive)
+# HFX3D_EXPORT_ROOT : shared folder for reviewed .h5 files (defaults to REVIEW_ROOT)
 # HFX3D_REVIEWER    : this person's name, stamped into their review files
 _FALLBACK_REVIEW_ROOT = Path(
     r"C:/Users/s4824030/PycharmProjects/HFX3D_functional_attribute_refinement"
     r"/HFX3D_functional_attribute_refinement/results/reviews")
 REVIEW_ROOT = Path(os.environ.get("HFX3D_REVIEW_ROOT", str(_FALLBACK_REVIEW_ROOT)))
+EXPORT_ROOT = Path(os.environ.get("HFX3D_EXPORT_ROOT", str(REVIEW_ROOT)))
 ENV_REVIEWER = os.environ.get("HFX3D_REVIEWER", "").strip()
 
 _VAL_RE = re.compile(r"^val_(\d+)_(.+)$")
@@ -69,6 +79,11 @@ def review_path_for(stem: str, reviewer: str) -> Path:
     return REVIEW_ROOT / f"{stem}__{_safe(reviewer)}.review.json"
 
 
+def export_path_for(stem: str, reviewer: str) -> Path:
+    """The reviewed .h5 that pairs with review_path_for's json (same stem)."""
+    return EXPORT_ROOT / f"{stem}__{_safe(reviewer)}.reviewed.h5"
+
+
 # ── data pulled from the loaded cloud's scalar fields ────────────────────────
 
 class CloudModel:
@@ -81,6 +96,7 @@ class CloudModel:
                              "open a build_review_cloud.py LAZ")
         self.inst_idx = names.index("instance_id")
         self.sem_idx = names.index("semantic_id") if "semantic_id" in names else None
+        self.purity_idx = names.index("purity") if "purity" in names else None
 
         self.val_sf, self.conf_sf, attr_names = {}, {}, {}
         for i, nm in enumerate(names):
@@ -108,6 +124,8 @@ class CloudModel:
                      for j in self.conf_sf}
         sem = cloud.getScalarField(self.sem_idx).asArray() if self.sem_idx is not None else None
         self.sem_id = {iid: int(sem[self._first[iid]]) for iid in self.ids} if sem is not None else {}
+        pur = cloud.getScalarField(self.purity_idx).asArray() if self.purity_idx is not None else None
+        self.purity = {iid: float(pur[self._first[iid]]) for iid in self.ids} if pur is not None else {}
 
         self._hl_idx = self._ensure_highlight()
 
@@ -129,6 +147,9 @@ class CloudModel:
     def cls(self, iid):
         return SEM_NAMES[self.sem_id[iid]] if iid in self.sem_id and \
             0 <= self.sem_id[iid] < len(SEM_NAMES) else "?"
+
+    def purity_of(self, iid):
+        return self.purity.get(iid, float("nan"))
 
     def count(self, iid):
         return self._count.get(iid, 0)
@@ -218,6 +239,73 @@ class Review:
         return self.path
 
 
+# ── reviewed .h5 export (minimal — mirrors functional.export_reviewed
+# without the P/G/C scores; those live in the pipeline .h5 used to build
+# this cloud, and can be joined back in later by instance_id if needed) ────
+
+def write_reviewed_h5(path: Path, model: "CloudModel", review: "Review",
+                      building: str) -> Path:
+    if h5py is None:
+        raise RuntimeError(
+            "h5py is not importable from CloudCompare's Python — "
+            "pip install h5py into that environment, then Save again.")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids = model.ids
+    n, n_attr = len(ids), model.n_attr
+
+    applicable = np.zeros((n, n_attr), np.uint8)
+    conf = np.full((n, n_attr), np.nan, np.float32)
+    pipeline_vec = np.zeros((n, n_attr), np.uint8)
+    human_vec = np.zeros((n, n_attr), np.uint8)
+    status = np.empty(n, dtype="S12")
+    flag = np.empty(n, dtype="S20")
+    note = np.empty(n, dtype=h5py.string_dtype())
+
+    for k, iid in enumerate(ids):
+        # read-only: don't touch review.records, so export never marks an
+        # untouched instance as if a human had looked at it
+        rec = review.records.get(iid)
+        for j in range(n_attr):
+            applicable[k, j] = int(model.applicable(iid, j))
+            conf[k, j] = model.confval(iid, j)
+            pipeline_vec[k, j] = model.pipeline(iid, j)
+        human_vec[k] = (np.array(rec["vector_human"], np.uint8) if rec
+                        else pipeline_vec[k])
+        status[k] = (rec["status"] if rec else "unreviewed").encode()
+        flag[k] = (rec["instance_flag"] if rec else "").encode()
+        note[k] = rec["note"] if rec else ""
+
+    with h5py.File(path, "w") as f:
+        m = f.create_group("metadata")
+        m.create_dataset("attribute_names",
+                         data=np.array(model.attr_names, dtype=h5py.string_dtype()))
+        m.create_dataset("attribute_count", data=np.int32(n_attr))
+        m.create_dataset("reviewer", data=review.reviewer)
+        m.create_dataset("building", data=building)
+        m.create_dataset("exported_at", data=datetime.now().isoformat(timespec="seconds"))
+        m.create_dataset("n_reviewed", data=np.int32(review.n_reviewed()))
+
+        g = f.create_group("instances")
+        g.create_dataset("instance_id", data=np.array(ids, np.int64))
+        g.create_dataset("semantic_id",
+                         data=np.array([model.sem_id.get(i, -1) for i in ids], np.int32))
+        g.create_dataset("semantic_class",
+                         data=np.array([model.cls(i) for i in ids], dtype=h5py.string_dtype()))
+        g.create_dataset("semantic_purity",
+                         data=np.array([model.purity_of(i) for i in ids], np.float32))
+        g.create_dataset("point_count",
+                         data=np.array([model.count(i) for i in ids], np.int64))
+        g.create_dataset("applicable_mask", data=applicable)
+        g.create_dataset("functional_attribute_confidence", data=conf)
+        g.create_dataset("functional_attribute_vector", data=pipeline_vec)         # pipeline
+        g.create_dataset("functional_attribute_vector_human", data=human_vec)      # human
+        g.create_dataset("review_status", data=status)
+        g.create_dataset("instance_flag", data=flag)
+        g.create_dataset("review_note", data=note)
+    return path
+
+
 # ── panel ────────────────────────────────────────────────────────────────
 
 class ReviewPanel(QtWidgets.QDialog):
@@ -229,6 +317,9 @@ class ReviewPanel(QtWidgets.QDialog):
         self.reviewer = ENV_REVIEWER
         self.review = Review(review_path_for(self.stem, self.reviewer),
                              self.model, self.stem, reviewer=self.reviewer)
+        self._apply_loaded_review()  # crash/reopen recovery: push restored
+                                      # decisions onto the scalar fields too,
+                                      # so "Colour by val:" matches the table
         self.iid = None
         self._loading = False
 
@@ -239,6 +330,13 @@ class ReviewPanel(QtWidgets.QDialog):
         self._refresh_list()
         self._try_register_picker()
         self._refresh_counter()
+
+    def _apply_loaded_review(self):
+        for iid, rec in self.review.records.items():
+            if iid not in self.model._first:
+                continue  # stale record from a since-changed cloud
+            for j, val in enumerate(rec["vector_human"]):
+                self.model.set_value(iid, j, val)
 
     def _build(self):
         outer = QtWidgets.QHBoxLayout(self)
@@ -554,6 +652,19 @@ class ReviewPanel(QtWidgets.QDialog):
         p = self.review.save()
         self._refresh_counter()
         print("saved review ->", p)
+        try:
+            h5_path = export_path_for(self.stem, self.reviewer)
+            write_reviewed_h5(h5_path, self.model, self.review, self.stem)
+            print("exported reviewed h5 ->", h5_path)
+            QtWidgets.QMessageBox.information(
+                self, "Saved", f"Saved:\n{p}\n{h5_path}\n\nUpload both files.")
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Saved (json only)",
+                f"Saved the review json:\n{p}\n\n"
+                f"Could not write the reviewed .h5:\n{exc}\n\n"
+                "If h5py isn't installed in CloudCompare's Python, run "
+                "'pip install h5py' there and Save again.")
         self.cc.updateUI()
 
     # ── picking (best-effort) ────────────────────────────────────────────
