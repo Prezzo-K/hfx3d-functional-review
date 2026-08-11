@@ -3,6 +3,11 @@
 __pycache__/
 *.pyc
 
+# CloudCompare's own per-plugin virtual environment (auto-created in the
+# plugin folder when you say yes to its "create a virtual environment?"
+# prompt — named after the plugin, not .venv)
+functional_review/
+
 # PyCharm
 .idea/
 

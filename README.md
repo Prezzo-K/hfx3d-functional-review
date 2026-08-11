@@ -17,43 +17,32 @@ Do this once, then you can review any building.
 - In the installer, tick **Python plugin**
 - Open CloudCompare once — you should see a Python console/menu
 
-### 2. Clone this repo and install dependencies
+### 2. Clone this repo
 
 ```powershell
 git clone <repo-url>
 cd hfx3d-functional-review
 ```
 
-(Optional) create and activate a virtual environment first, if you'd rather
-keep this isolated from other Python projects on your machine:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-Then install the requirements:
-
-```powershell
-pip install -r requirements.txt
-```
-
-**Important:** this must land in whichever Python CloudCompare's Python
-plugin is actually configured to use — check via CC's Python console
-(Tools → Python → Python console, or similar) with `import sys;
-print(sys.executable)`. If that's a different interpreter than the one
-above (a system Python, or one CC bundles itself), run the `pip install`
-against that interpreter instead — a venv only helps if you point
-CloudCompare at it. This is what makes **Save Review** able to write the
-reviewed `.h5` (it needs `h5py`) alongside the `.review.json`.
+Nothing to install yet — the next step handles it.
 
 ### 3. Add this repo as a CloudCompare custom plugin
 
 - Open CloudCompare
 - **Tools → Python → Edit plugin search paths** (wording varies by build)
 - Add the full path to this cloned repo folder
+- CloudCompare will notice `requirements.txt` in the folder and **ask if you
+  want it to create a virtual environment** for this plugin — say **yes**.
+  It creates a dedicated venv and installs `numpy` / `h5py` / `PyQt5` into
+  it automatically, so **Save Review** can write the reviewed `.h5` (it
+  needs `h5py`) without you having to figure out which Python CC uses.
 - Restart CloudCompare
 - A **Functional Review** button should appear in the toolbar
+
+If it *doesn't* prompt you (older CC builds may not support per-plugin
+venvs), install manually instead: find whichever Python CC's Python plugin
+is configured to use (its console → `import sys; print(sys.executable)`)
+and run `pip install -r requirements.txt` against that interpreter.
 
 ### 4. Set your name and where your files get saved (once)
 
@@ -92,8 +81,7 @@ standard backs it, and the geometric condition the pipeline used to suggest
 a value — that's the context your judgment call needs. The main thing to
 watch for: the same semantic class can get different attributes depending
 on geometry (e.g. stairs with railings get `fall_protection`, stairs
-without don't) — that's the actual point of this review, not an edge case
-to explain away.
+without don't) — that's the actual point of this review and see if something is off and needs changing i.e If an attribute shouldn't be assigned to a specific instance.
 
 The 15 attributes you'll review:
 

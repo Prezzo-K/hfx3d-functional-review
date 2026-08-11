@@ -112,7 +112,9 @@ class CloudModel:
         self.n_attr = max(attr_names) + 1
         self.attr_names = [attr_names.get(j, f"attr{j}") for j in range(self.n_attr)]
 
-        self._inst = cloud.getScalarField(self.inst_idx).asArray().astype(np.int64)
+        # int32 is enough for any instance id and halves this copy's memory
+        # vs int64 — real savings on 20-60M point buildings
+        self._inst = cloud.getScalarField(self.inst_idx).asArray().astype(np.int32)
         uids, first, counts = np.unique(self._inst, return_index=True, return_counts=True)
         keep = uids >= 0
         self.ids = uids[keep].tolist()
@@ -736,8 +738,12 @@ def main():
     try:
         _PANEL = ReviewPanel(cc, cloud)
     except Exception as exc:
+        # Letting this propagate back into CC's action-dispatch can take the
+        # whole app down with it — show it, log it, and stop here instead.
+        import traceback
+        traceback.print_exc()
         QtWidgets.QMessageBox.critical(None, "Functional Review", str(exc))
-        raise
+        return
     _PANEL.show()
 
 
