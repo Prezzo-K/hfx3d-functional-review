@@ -1,0 +1,6 @@
+pyside6
+pyvista
+pyvistaqt
+numpy
+h5py
+laspy[lazrs]

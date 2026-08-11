@@ -1,9 +1,17 @@
 # HFX3D functional-attribute review
 
-Human validation of HFX3D's automatic functional-attribute assignments, done
-inside CloudCompare. Everyone on the team uses the same setup and the same
-repo — clone it, install one requirements file, add it as a CloudCompare
-plugin, and review your assigned building(s).
+Human validation of HFX3D's automatic functional-attribute assignments.
+Everyone on the team uses the same repo — clone it, review your assigned
+building(s), upload the results.
+
+> **Two ways to review — same output files, so uploads/workflow are identical:**
+>
+> - **Standalone app (recommended, fast)** — a small PySide6/PyVista desktop
+>   reviewer. Instant instance-switching even on integrated GPUs, no CloudCompare
+>   needed. **See [`app/README.md`](app/README.md).** This is where active work is.
+> - **CloudCompare plugin (below)** — reviews inside CloudCompare. Works, but
+>   loading 20–48M-point clouds and per-point operations are slow on big
+>   buildings (a CloudCompare limitation, not fixable from the plugin).
 
 ---
 

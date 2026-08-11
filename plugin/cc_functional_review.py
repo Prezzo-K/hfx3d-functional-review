@@ -23,10 +23,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+
+# Set HFX3D_PROFILE=1 to print per-step timings to the CloudCompare console,
+# to see where plugin-open / instance-selection time actually goes.
+_PROFILE = bool(os.environ.get("HFX3D_PROFILE", "").strip())
+
+
+def _ms(t0):
+    return (time.perf_counter() - t0) * 1000.0
 
 try:
     import h5py
@@ -155,21 +164,16 @@ def _find_companion(stem):
             roots.append(Path(v))
     roots += [REVIEW_ROOT, EXPORT_ROOT, Path.cwd()]
     fname = f"{stem}{COMPANION_SUFFIX}"
-    # first a direct hit in each root (fast), then a recursive search (handles
-    # train/test/val subfolders) so one HFX3D_ATTRS_ROOT can cover a whole tree
+    # check each root and its train/test/val subfolder directly. Targeted, not
+    # a recursive walk — rglob over a root that happens to contain venvs, .git
+    # or the raw review_clouds tree can take >10 s.
     for r in roots:
-        p = r / fname
-        if p not in seen:
-            seen.add(p)
-            if p.exists():
-                return p
-    for r in roots:
-        try:
-            hit = next(r.rglob(fname), None)
-        except Exception:
-            hit = None
-        if hit is not None:
-            return hit
+        for sd in ("", "train", "test", "val"):
+            p = (r / sd / fname) if sd else (r / fname)
+            if p not in seen:
+                seen.add(p)
+                if p.exists():
+                    return p
     return None
 
 
@@ -208,6 +212,7 @@ class CloudModel:
 
         # int32 is enough for any instance id and halves this copy's memory
         # vs int64 — real savings on 20-60M point buildings
+        t0 = time.perf_counter() if _PROFILE else 0
         self._inst = _sf_np(cloud, self.inst_idx).astype(np.int32)
         uids, first, counts = np.unique(self._inst, return_index=True, return_counts=True)
         keep = uids >= 0
@@ -216,6 +221,7 @@ class CloudModel:
         self._count = {int(u): int(c) for u, c in zip(uids[keep], counts[keep])}
         self.idpos = {iid: k for k, iid in enumerate(self.ids)}
         self.n = len(self.ids)
+        t_unique = time.perf_counter() if _PROFILE else 0
 
         sem = _sf_np(cloud, self.sem_idx) if self.sem_idx is not None else None
         self.sem_id = {iid: int(sem[self._first[iid]]) for iid in self.ids} if sem is not None else {}
@@ -235,9 +241,17 @@ class CloudModel:
         self.pipe0 = self.val_h.copy()
         self._has_conf = {j: bool(np.isfinite(self.conf_i[:, j]).any())
                           for j in range(self.n_attr)}
+        t_attrs = time.perf_counter() if _PROFILE else 0
 
         self._hl_idx = self._ensure_highlight()
+        if _PROFILE:
+            print(f"[profile] CloudModel: unique/instances={(t_unique - t0) * 1000:.0f}ms "
+                  f"attrs={(t_attrs - t_unique) * 1000:.0f}ms "
+                  f"add_highlight_sf={_ms(t_attrs):.0f}ms "
+                  f"({len(self._inst):,} pts, {self.n} instances, "
+                  f"{'legacy' if self._val_sf else 'companion'})")
         self._colorby_idx = None
+        self._hl_prev = None                  # point indices last highlighted
         self._ids_arr = np.asarray(self.ids, dtype=np.int64)
         self._maxid = int(self._inst.max()) if self._inst.size else 0
 
@@ -290,10 +304,15 @@ class CloudModel:
             if c.getScalarFieldName(i) == name:
                 return i
         try:
+            t0 = time.perf_counter() if _PROFILE else 0
             idx = c.addScalarField(name)
             if idx is None or idx < 0:
                 return None
+            t_add = time.perf_counter() if _PROFILE else 0
             _sf_np(c, idx)[:] = 0.0
+            if _PROFILE:
+                print(f"[profile] add SF '{name}': "
+                      f"addScalarField={(t_add - t0) * 1000:.0f}ms zero={_ms(t_add):.0f}ms")
             return idx
         except Exception as exc:
             print(f"scalar field '{name}' unavailable:", exc)
@@ -362,8 +381,14 @@ class CloudModel:
         if self._hl_idx is None:
             return None
         arr = _sf_np(self.cloud, self._hl_idx)
-        arr[:] = 0.0
-        arr[self._inst == iid] = 1.0
+        # clear only what we lit up last time, not all N points every click
+        if self._hl_prev is None:
+            arr[:] = 0.0
+        else:
+            arr[self._hl_prev] = 0.0
+        cur = np.nonzero(self._inst == iid)[0]   # one O(N) scan (unavoidable)
+        arr[cur] = 1.0
+        self._hl_prev = cur
         return self._hl_idx
 
 
@@ -505,6 +530,7 @@ class ReviewPanel(QtWidgets.QDialog):
                                       # so "Colour by val:" matches the table
         self.iid = None
         self._loading = False
+        self._displayed_sf = None            # which SF is currently shown in 3D
 
         self.setWindowTitle(f"Functional Review — {self.stem}")
         self.setWindowFlags(self.windowFlags() | STAY_ON_TOP)
@@ -652,6 +678,9 @@ class ReviewPanel(QtWidgets.QDialog):
         iid = int(iid)
         if iid not in self.model._first:
             return
+        if _PROFILE:
+            print(f"[profile] select() called for #{iid}")
+        t0 = time.perf_counter() if _PROFILE else 0
         self.iid = iid
         rec = self.review.get(iid)
         self._loading = True
@@ -673,13 +702,21 @@ class ReviewPanel(QtWidgets.QDialog):
                     it.setForeground(QColor("#888"))
             self.table.setItem(j, 0, it0); self.table.setItem(j, 1, it1); self.table.setItem(j, 2, it2)
         self._loading = False
-        # highlight in 3D
+        t_table = time.perf_counter() if _PROFILE else 0
+        # highlight in 3D (0/1 field, range never changes → no recompute)
         hl = self.model.set_highlight(iid)
+        t_hl = time.perf_counter() if _PROFILE else 0
         kind, _ = self.cb_color.currentData()
         if kind == "hl" and hl is not None:
-            self._set_displayed_sf(hl)
+            self._set_displayed_sf(hl, recompute=False)
         # keep list selection in sync (when driven by picking)
         self._sync_list_selection(iid)
+        if _PROFILE:
+            print(f"[profile] select #{iid}: "
+                  f"table={(t_table - t0) * 1000:.0f}ms "
+                  f"highlight={(t_hl - t_table) * 1000:.0f}ms "
+                  f"draw={(time.perf_counter() - t_hl) * 1000:.0f}ms "
+                  f"total={_ms(t0):.0f}ms")
 
     def _sync_list_selection(self, iid):
         for r in range(self.list.count()):
@@ -816,20 +853,30 @@ class ReviewPanel(QtWidgets.QDialog):
             if idx is not None:
                 self._set_displayed_sf(idx)
 
-    def _set_displayed_sf(self, sf_idx):
+    def _set_displayed_sf(self, sf_idx, recompute=True):
+        """Show scalar field ``sf_idx`` and redraw once.
+
+        Only re-binds the displayed field / recomputes its colour range when it
+        actually changes — on repeated highlight clicks the field index and its
+        0/1 range are unchanged, so we skip straight to a single redraw. The old
+        code re-bound the field, rescanned min/max, and rendered the whole cloud
+        TWICE (redrawDisplay + redrawAll) on every click.
+        """
         cloud = self.model.cloud
         try:
-            sf = cloud.getScalarField(sf_idx)
-            if hasattr(sf, "computeMinAndMax"):
-                sf.computeMinAndMax()
-            cloud.setCurrentDisplayedScalarField(sf_idx)
-            if hasattr(cloud, "showSF"):
-                cloud.showSF(True)
+            if sf_idx != self._displayed_sf:
+                cloud.setCurrentDisplayedScalarField(sf_idx)
+                if hasattr(cloud, "showSF"):
+                    cloud.showSF(True)
+                self._displayed_sf = sf_idx
+                recompute = True                  # new field must be scaled once
+            if recompute:
+                sf = cloud.getScalarField(sf_idx)
+                if hasattr(sf, "computeMinAndMax"):
+                    sf.computeMinAndMax()
             if hasattr(cloud, "redrawDisplay"):
                 cloud.redrawDisplay()
             self.cc.updateUI()
-            if hasattr(self.cc, "redrawAll"):
-                self.cc.redrawAll()
         except Exception as exc:
             print("recolor failed:", exc)
 

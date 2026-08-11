@@ -35,3 +35,7 @@ build_review_cloud.py
 review_admin.py
 export_reviewed.py
 review_editor.py
+
+# standalone review app
+.app-venv/
+bundles/
