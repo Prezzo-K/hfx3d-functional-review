@@ -19,6 +19,7 @@ data/
 *.las
 *.ply
 *.h5
+*.attrs.npz
 reviews/
 reviewed_h5/
 review_clouds/

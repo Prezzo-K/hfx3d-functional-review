@@ -107,6 +107,10 @@ future review picks them up automatically:
 - **`HFX3D_EXPORT_ROOT`** — the folder **Save Review** writes your
   `.reviewed.h5` to. This is the larger binary file built *from* the JSON,
   meant for upload, not for editing.If you don't set it, it just defaults to `HFX3D_REVIEW_ROOT`.
+- **`HFX3D_ATTRS_ROOT`** *(only if you use slim clouds)* — the folder holding
+  the `<building>.attrs.npz` companion files produced by
+  `tools/slim_review_cloud.py`. Searched recursively; defaults to the review /
+  export roots and the working dir if unset. See [`tools/README.md`](tools/README.md).
 
 ```powershell
 setx HFX3D_REVIEWER "your-name"
@@ -193,9 +197,11 @@ Upload **both** files back to the AI server:
   **Plugins → Python Plugin → Package Manager**, or against the interpreter the
   Console prints (`import sys; print(sys.executable)`), then restart.
 - Review cloud takes minutes to load / stalls / crashes CloudCompare → the
-  `.laz` is huge (tens of millions of points × 30+ scalar fields). Shrink it
-  once with `tools/downsample_review_cloud.py` and open the downsampled file
-  instead — see [`tools/README.md`](tools/README.md).
+  `.laz` carries 30 per-point `val_`/`conf_` scalar fields that are the same
+  for every point of an instance. Convert it once with
+  `tools/slim_review_cloud.py` (lossless, full density — moves those fields to
+  a tiny companion file) and open the slim `.laz` with `HFX3D_ATTRS_ROOT` set.
+  See [`tools/README.md`](tools/README.md).
 - Reviews save in the wrong place → check `HFX3D_REVIEWER` / `HFX3D_REVIEW_ROOT` / `HFX3D_EXPORT_ROOT` are set; redo the `setx` steps
 - Save writes the JSON but warns it couldn't write the `.h5` → `h5py` isn't importable from CloudCompare's Python; `pip install h5py` there and Save again (the JSON is still valid on its own if you need to upload before fixing this)
 

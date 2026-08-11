@@ -137,9 +137,56 @@ def _sf_np(cloud, idx):
     return np.asarray(cloud.getScalarField(idx).asArray())
 
 
+COMPANION_SUFFIX = ".attrs.npz"
+
+
+def _find_companion(stem):
+    """Locate a per-instance attribute companion for a slim review cloud.
+
+    Slim clouds carry only instance_id/semantic_id/purity per point; the 15
+    val + 15 conf attributes live in a small ``<stem>.attrs.npz`` beside them.
+    CloudCompare's Python API doesn't expose the loaded cloud's file path, so
+    we look the companion up by building name in the configured folders.
+    """
+    roots, seen = [], set()
+    for env in ("HFX3D_ATTRS_ROOT", "HFX3D_REVIEW_ROOT", "HFX3D_EXPORT_ROOT"):
+        v = os.environ.get(env, "").strip()
+        if v:
+            roots.append(Path(v))
+    roots += [REVIEW_ROOT, EXPORT_ROOT, Path.cwd()]
+    fname = f"{stem}{COMPANION_SUFFIX}"
+    # first a direct hit in each root (fast), then a recursive search (handles
+    # train/test/val subfolders) so one HFX3D_ATTRS_ROOT can cover a whole tree
+    for r in roots:
+        p = r / fname
+        if p not in seen:
+            seen.add(p)
+            if p.exists():
+                return p
+    for r in roots:
+        try:
+            hit = next(r.rglob(fname), None)
+        except Exception:
+            hit = None
+        if hit is not None:
+            return hit
+    return None
+
+
 class CloudModel:
-    def __init__(self, cloud):
+    """Per-instance view of a review cloud.
+
+    Attribute values/confidences are held per INSTANCE, not per point — they're
+    constant across an instance's points, so this both saves memory and lets the
+    panel work identically whether the cloud is a legacy "fat" LAZ (30 per-point
+    val_/conf_ scalar fields) or a slim LAZ + ``.attrs.npz`` companion. Only
+    instance_id (+ semantic_id/purity) is ever read per point.
+    """
+
+    def __init__(self, cloud, stem=""):
         self.cloud = cloud
+        self.stem = stem
+        self.companion_path = None
         names = [cloud.getScalarFieldName(i)
                  for i in range(cloud.getNumberOfScalarFields())]
         if "instance_id" not in names:
@@ -149,19 +196,15 @@ class CloudModel:
         self.sem_idx = names.index("semantic_id") if "semantic_id" in names else None
         self.purity_idx = names.index("purity") if "purity" in names else None
 
-        self.val_sf, self.conf_sf, attr_names = {}, {}, {}
+        # legacy per-point val_/conf_ fields, if present
+        self._val_sf, self._conf_sf, sf_attr = {}, {}, {}
         for i, nm in enumerate(names):
             m = _VAL_RE.match(nm)
             if m:
-                j = int(m.group(1)); self.val_sf[j] = i; attr_names[j] = m.group(2); continue
+                j = int(m.group(1)); self._val_sf[j] = i; sf_attr[j] = m.group(2); continue
             m = _CONF_RE.match(nm)
             if m:
-                self.conf_sf[int(m.group(1))] = i
-        if not self.val_sf:
-            raise ValueError("cloud has no 'val_*' scalar fields — "
-                             "rebuild with build_review_cloud.py")
-        self.n_attr = max(attr_names) + 1
-        self.attr_names = [attr_names.get(j, f"attr{j}") for j in range(self.n_attr)]
+                self._conf_sf[int(m.group(1))] = i
 
         # int32 is enough for any instance id and halves this copy's memory
         # vs int64 — real savings on 20-60M point buildings
@@ -171,31 +214,92 @@ class CloudModel:
         self.ids = uids[keep].tolist()
         self._first = {int(u): int(f) for u, f in zip(uids[keep], first[keep])}
         self._count = {int(u): int(c) for u, c in zip(uids[keep], counts[keep])}
+        self.idpos = {iid: k for k, iid in enumerate(self.ids)}
+        self.n = len(self.ids)
 
-        self.cur = {j: _sf_np(cloud, self.val_sf[j]) for j in range(self.n_attr)}
-        self.conf = {j: _sf_np(cloud, self.conf_sf[j]) for j in self.conf_sf}
         sem = _sf_np(cloud, self.sem_idx) if self.sem_idx is not None else None
         self.sem_id = {iid: int(sem[self._first[iid]]) for iid in self.ids} if sem is not None else {}
         pur = _sf_np(cloud, self.purity_idx) if self.purity_idx is not None else None
         self.purity = {iid: float(pur[self._first[iid]]) for iid in self.ids} if pur is not None else {}
 
+        # attribute table: legacy per-point SFs, else the slim companion file
+        if self._val_sf:
+            self.n_attr = max(self._val_sf) + 1
+            self.attr_names = [sf_attr.get(j, f"attr{j}") for j in range(self.n_attr)]
+            self._load_attrs_from_sfs()
+        else:
+            self._load_attrs_from_companion()
+
+        # snapshot the pipeline vector so edits (which mutate val_h) never move
+        # the "pipeline" reference used for the changed-vs-pipeline diff
+        self.pipe0 = self.val_h.copy()
+        self._has_conf = {j: bool(np.isfinite(self.conf_i[:, j]).any())
+                          for j in range(self.n_attr)}
+
         self._hl_idx = self._ensure_highlight()
+        self._colorby_idx = None
+        self._ids_arr = np.asarray(self.ids, dtype=np.int64)
+        self._maxid = int(self._inst.max()) if self._inst.size else 0
+
+    # ── attribute-table loaders ─────────────────────────────────────────
+    def _load_attrs_from_sfs(self):
+        self.val_h = np.zeros((self.n, self.n_attr), np.int8)
+        self.conf_i = np.full((self.n, self.n_attr), np.nan, np.float32)
+        for j in range(self.n_attr):
+            vp = _sf_np(self.cloud, self._val_sf[j])
+            for k, iid in enumerate(self.ids):
+                self.val_h[k, j] = 1 if float(vp[self._first[iid]]) > 0.5 else 0
+        for j, si in self._conf_sf.items():
+            cp = _sf_np(self.cloud, si)
+            for k, iid in enumerate(self.ids):
+                self.conf_i[k, j] = float(cp[self._first[iid]])
+
+    def _load_attrs_from_companion(self):
+        p = _find_companion(self.stem)
+        if p is None:
+            raise ValueError(
+                "cloud has no 'val_*' scalar fields and no companion "
+                f"'{self.stem}{COMPANION_SUFFIX}' was found (looked under "
+                "HFX3D_ATTRS_ROOT / HFX3D_REVIEW_ROOT / HFX3D_EXPORT_ROOT / "
+                "the working dir). Build one with tools/slim_review_cloud.py, "
+                "or open the original build_review_cloud.py LAZ.")
+        d = np.load(p, allow_pickle=True)
+        self.companion_path = p
+        val = np.asarray(d["val"])
+        conf = np.asarray(d["conf"], dtype=np.float32)
+        cid = np.asarray(d["instance_id"]).astype(np.int64)
+        self.attr_names = [str(x) for x in d["attribute_names"]]
+        self.n_attr = int(val.shape[1])
+        rowof = {int(i): k for k, i in enumerate(cid)}
+        self.val_h = np.zeros((self.n, self.n_attr), np.int8)
+        self.conf_i = np.full((self.n, self.n_attr), np.nan, np.float32)
+        for k, iid in enumerate(self.ids):
+            r = rowof.get(int(iid))
+            if r is None:
+                continue                      # instance absent from companion
+            self.val_h[k] = (val[r] > 0.5).astype(np.int8)
+            self.conf_i[k] = conf[r]
+        print("loaded attribute companion ->", p)
 
     def _ensure_highlight(self):
+        return self._ensure_sf("review_highlight")
+
+    def _ensure_sf(self, name):
         c = self.cloud
         for i in range(c.getNumberOfScalarFields()):
-            if c.getScalarFieldName(i) == "review_highlight":
+            if c.getScalarFieldName(i) == name:
                 return i
         try:
-            idx = c.addScalarField("review_highlight")
+            idx = c.addScalarField(name)
             if idx is None or idx < 0:
                 return None
             _sf_np(c, idx)[:] = 0.0
             return idx
         except Exception as exc:
-            print("highlight SF unavailable:", exc)
+            print(f"scalar field '{name}' unavailable:", exc)
             return None
 
+    # ── per-instance reads ──────────────────────────────────────────────
     def cls(self, iid):
         return SEM_NAMES[self.sem_id[iid]] if iid in self.sem_id and \
             0 <= self.sem_id[iid] < len(SEM_NAMES) else "?"
@@ -207,25 +311,52 @@ class CloudModel:
         return self._count.get(iid, 0)
 
     def value(self, iid, j):
-        return int(self.cur[j][self._first[iid]] > 0.5)
+        return int(self.val_h[self.idpos[iid], j])
 
     def n_on(self, iid):
-        return int(sum(self.value(iid, j) for j in range(self.n_attr)))
+        return int(self.val_h[self.idpos[iid]].sum())
+
+    def has_conf(self, j):
+        return self._has_conf.get(j, False)
 
     def pipeline(self, iid, j):
-        if j in self.conf:
-            return int(self.conf[j][self._first[iid]] >= 0.5)
-        return self.value(iid, j)
+        k = self.idpos[iid]
+        if self._has_conf.get(j) and np.isfinite(self.conf_i[k, j]):
+            return int(self.conf_i[k, j] >= 0.5)
+        return int(self.pipe0[k, j])
 
     def confval(self, iid, j):
-        return float(self.conf[j][self._first[iid]]) if j in self.conf else float("nan")
+        return float(self.conf_i[self.idpos[iid], j])
 
     def applicable(self, iid, j):
-        return not (j in self.conf and self.conf[j][self._first[iid]] < 0.0)
+        c = self.conf_i[self.idpos[iid], j]
+        return not (np.isfinite(c) and c < 0.0)
 
     def set_value(self, iid, j, val):
-        self.cur[j][self._inst == iid] = float(1.0 if val else 0.0)
-        return self.val_sf[j]
+        self.val_h[self.idpos[iid], j] = 1 if val else 0
+
+    # ── 3D display helpers (build per-point fields on demand) ────────────
+    def _broadcast(self, per_inst, fill):
+        """Map a per-instance array onto every point via instance_id."""
+        lut = np.full(self._maxid + 1, fill, np.float32)
+        if self._ids_arr.size:
+            lut[self._ids_arr] = np.asarray(per_inst, np.float32)
+        pp = lut[np.clip(self._inst, 0, self._maxid)]
+        pp[self._inst < 0] = fill
+        return pp
+
+    def color_by(self, kind, j):
+        """Fill a single scratch scalar field with attr j's value/conf per point."""
+        if self._colorby_idx is None:
+            self._colorby_idx = self._ensure_sf("review_colorby")
+        if self._colorby_idx is None:
+            return None
+        if kind == "conf":
+            pp = self._broadcast(self.conf_i[:, j], float("nan"))
+        else:
+            pp = self._broadcast(self.val_h[:, j], 0.0)
+        _sf_np(self.cloud, self._colorby_idx)[:] = pp
+        return self._colorby_idx
 
     def set_highlight(self, iid):
         if self._hl_idx is None:
@@ -364,8 +495,8 @@ class ReviewPanel(QtWidgets.QDialog):
     def __init__(self, cc, cloud):
         super().__init__()
         self.cc = cc
-        self.model = CloudModel(cloud)
         self.stem = _building_stem(cloud.getName() or "cloud")
+        self.model = CloudModel(cloud, self.stem)
         self.reviewer = ENV_REVIEWER
         self.review = Review(review_path_for(self.stem, self.reviewer),
                              self.model, self.stem, reviewer=self.reviewer)
@@ -434,7 +565,7 @@ class ReviewPanel(QtWidgets.QDialog):
         for j, nm in enumerate(self.model.attr_names):
             self.cb_color.addItem("val: " + nm, ("val", j))
         for j, nm in enumerate(self.model.attr_names):
-            if j in self.model.conf_sf:
+            if self.model.has_conf(j):
                 self.cb_color.addItem("conf: " + nm, ("conf", j))
         self.cb_color.currentIndexChanged.connect(self._on_color_by)
         cr.addWidget(self.cb_color, stretch=1)
@@ -570,11 +701,11 @@ class ReviewPanel(QtWidgets.QDialog):
         val = 1 if item.checkState() == CHECKED else 0
         self.review.get(self.iid)["vector_human"][j] = val
         self.review.dirty = True
-        sf_idx = self.model.set_value(self.iid, j, val)
+        self.model.set_value(self.iid, j, val)
         self._touch_reviewed()
         kind, cj = self.cb_color.currentData()
         if kind == "val" and cj == j:
-            self._set_displayed_sf(sf_idx)
+            self._refresh_colorby()
         self._update_list_item(self.iid)
         self._refresh_counter()
 
@@ -587,7 +718,7 @@ class ReviewPanel(QtWidgets.QDialog):
             self.model.set_value(self.iid, j, val)
         self.review.dirty = True
         self._touch_reviewed()
-        self.select(self.iid); self._refresh_counter()
+        self.select(self.iid); self._refresh_colorby(); self._refresh_counter()
 
     def _reset(self):
         if self.iid is None:
@@ -599,7 +730,7 @@ class ReviewPanel(QtWidgets.QDialog):
             self.model.set_value(self.iid, j, pv)
         self.review.dirty = True
         self._touch_reviewed()
-        self.select(self.iid); self._refresh_counter()
+        self.select(self.iid); self._refresh_colorby(); self._refresh_counter()
 
     def _on_flag(self):
         if self._loading or self.iid is None:
@@ -672,10 +803,18 @@ class ReviewPanel(QtWidgets.QDialog):
                 hl = self.model.set_highlight(self.iid)
                 if hl is not None:
                     self._set_displayed_sf(hl)
-        elif kind == "val":
-            self._set_displayed_sf(self.model.val_sf[j])
-        elif kind == "conf":
-            self._set_displayed_sf(self.model.conf_sf[j])
+        else:
+            idx = self.model.color_by(kind, j)
+            if idx is not None:
+                self._set_displayed_sf(idx)
+
+    def _refresh_colorby(self):
+        """Re-apply the current val/conf colouring after edits change values."""
+        kind, j = self.cb_color.currentData()
+        if kind in ("val", "conf"):
+            idx = self.model.color_by(kind, j)
+            if idx is not None:
+                self._set_displayed_sf(idx)
 
     def _set_displayed_sf(self, sf_idx):
         cloud = self.model.cloud
