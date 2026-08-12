@@ -18,6 +18,7 @@ Requires: pip install pyside6 pyvista pyvistaqt numpy h5py
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -38,11 +39,43 @@ SEM_NAMES = ["wall", "window", "door", "balcony", "vegetation", "stairs",
 FLAGS = ["", "bad_segmentation", "wrong_class", "other"]
 HL_DISPLAY_CAP = 250_000          # subsample only the 3D display of huge instances
 
-REVIEW_ROOT = Path(os.environ.get("HFX3D_REVIEW_ROOT", "").strip()
-                   or (Path.home() / "HFX3D_reviews"))
-_exp = os.environ.get("HFX3D_EXPORT_ROOT", "").strip()
-EXPORT_ROOT = Path(_exp) if _exp else REVIEW_ROOT
-ENV_REVIEWER = os.environ.get("HFX3D_REVIEWER", "").strip()
+# Settings persist in a small config file so you don't depend on env vars
+# (which need a fresh shell after `setx`). Priority: env var > saved config >
+# default. Whatever you set in the app is written back here.
+CONFIG_PATH = Path.home() / ".hfx3d_review.json"
+
+
+def _load_cfg():
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_cfg(cfg):
+    try:
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print("could not save settings:", exc)
+
+
+_CFG = _load_cfg()
+
+
+def _cfg_reviewer():
+    return os.environ.get("HFX3D_REVIEWER", "").strip() or _CFG.get("reviewer", "")
+
+
+def _cfg_review_root():
+    v = os.environ.get("HFX3D_REVIEW_ROOT", "").strip()
+    return Path(v) if v else Path(_CFG.get("review_root") or (Path.home() / "HFX3D_reviews"))
+
+
+def _cfg_export_root(review_root):
+    v = os.environ.get("HFX3D_EXPORT_ROOT", "").strip()
+    if v:
+        return Path(v)
+    return Path(_CFG["export_root"]) if _CFG.get("export_root") else Path(review_root)
 
 
 def _safe(name):
@@ -108,14 +141,19 @@ class Bundle:
 class ReviewStore:
     """Same JSON/H5 contract as the CloudCompare plugin."""
 
-    def __init__(self, bundle: Bundle, reviewer=""):
+    def __init__(self, bundle: Bundle, reviewer="", review_root=None, export_root=None):
         self.b = bundle
         self.reviewer = reviewer
+        self.review_root = Path(review_root) if review_root else _cfg_review_root()
+        self.export_root = Path(export_root) if export_root else _cfg_export_root(self.review_root)
         self.dirty = False
         self.records = {}
-        self.path = REVIEW_ROOT / f"{bundle.building}__{_safe(reviewer)}.review.json"
+        self.path = self._json_path()
         if self.path.exists():
             self._load()
+
+    def _json_path(self):
+        return self.review_root / f"{self.b.building}__{_safe(self.reviewer)}.review.json"
 
     def _default(self, k):
         iid = self.b.ids[k]
@@ -141,7 +179,6 @@ class ReviewStore:
         return sum(1 for r in self.records.values() if r["status"] == "reviewed")
 
     def _load(self):
-        import json
         d = json.loads(self.path.read_text(encoding="utf-8"))
         self.reviewer = d.get("reviewer", self.reviewer)
         for k, v in d.get("instances", {}).items():
@@ -151,8 +188,8 @@ class ReviewStore:
                 "instance_flag": v.get("instance_flag", ""), "note": v.get("note", "")}
 
     def save(self):
-        import json
         b = self.b
+        self.path = self._json_path()               # honour current reviewer/root
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"building": b.building, "split": "", "reviewer": self.reviewer,
                    "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -175,7 +212,7 @@ class ReviewStore:
         if h5py is None:
             raise RuntimeError("h5py not installed")
         b = self.b
-        p = EXPORT_ROOT / f"{b.building}__{_safe(self.reviewer)}.reviewed.h5"
+        p = self.export_root / f"{b.building}__{_safe(self.reviewer)}.reviewed.h5"
         p.parent.mkdir(parents=True, exist_ok=True)
         n, K = len(b.ids), b.n_attr
         appl = np.zeros((n, K), np.uint8); conf = np.full((n, K), np.nan, np.float32)
@@ -219,7 +256,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, bundle: Bundle):
         super().__init__()
         self.b = bundle
-        self.review = ReviewStore(bundle, ENV_REVIEWER)
+        self.review = ReviewStore(bundle, _cfg_reviewer())
         self.k = None
         self._loading = False
         self.setWindowTitle(f"Functional Review — {bundle.building}")
@@ -277,9 +314,16 @@ class MainWindow(QtWidgets.QMainWindow):
         right = QtWidgets.QWidget(); rv = QtWidgets.QVBoxLayout(right)
         top = QtWidgets.QHBoxLayout()
         top.addWidget(QtWidgets.QLabel("Reviewer"))
-        self.ed_rev = QtWidgets.QLineEdit(self.review.reviewer); top.addWidget(self.ed_rev)
+        self.ed_rev = QtWidgets.QLineEdit(self.review.reviewer)
+        self.ed_rev.setPlaceholderText("your name")
+        top.addWidget(self.ed_rev)
         b_save = QtWidgets.QPushButton("Save"); b_save.clicked.connect(self._save); top.addWidget(b_save)
         rv.addLayout(top)
+        srow = QtWidgets.QHBoxLayout(); srow.addWidget(QtWidgets.QLabel("Save to"))
+        self.lbl_saveto = QtWidgets.QLabel(str(self.review.review_root)); self.lbl_saveto.setStyleSheet("color:#666")
+        srow.addWidget(self.lbl_saveto, 1)
+        b_ch = QtWidgets.QPushButton("Change…"); b_ch.clicked.connect(self._change_saveto)
+        srow.addWidget(b_ch); rv.addLayout(srow)
         self.cb_follow = QtWidgets.QCheckBox("zoom to instance on select"); self.cb_follow.setChecked(True)
         rv.addWidget(self.cb_follow)
         # colour the whole building by an attribute — to spot outliers
@@ -548,8 +592,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_counter.setText(f"{self.review.n_reviewed()} / {len(self.b.ids)} reviewed"
                                  + ("   • unsaved" if self.review.dirty else ""))
 
+    def _change_saveto(self):
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "Save reviews to…",
+                                                       str(self.review.review_root))
+        if not d:
+            return
+        self.review.review_root = Path(d); self.review.export_root = Path(d)
+        self.lbl_saveto.setText(d); self._persist_settings()
+
+    def _persist_settings(self):
+        _CFG["reviewer"] = self.ed_rev.text().strip()
+        _CFG["review_root"] = str(self.review.review_root)
+        _CFG["export_root"] = str(self.review.export_root)
+        _save_cfg(_CFG)
+
     def _save(self):
-        self.review.reviewer = self.ed_rev.text().strip()
+        name = self.ed_rev.text().strip()
+        if not name:
+            QtWidgets.QMessageBox.warning(self, "Reviewer name",
+                                          "Enter your name in the Reviewer box first — it's "
+                                          "stamped into your files so reviews don't collide.")
+            return
+        self.review.reviewer = name
+        self._persist_settings()
         p = self.review.save(); self._refresh_counter()
         msg = f"Saved:\n{p}"
         try:
@@ -559,20 +624,103 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Saved", msg)
 
 
-def _pick_bundle(argv):
-    if len(argv) > 1 and Path(argv[1]).exists():
-        return Path(argv[1])
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(argv)
-    d = QtWidgets.QFileDialog.getExistingDirectory(None, "Open bundle folder (from build_bundle.py)")
-    return Path(d) if d else None
+APP_DIR = Path(__file__).resolve().parent
+BUNDLES_DIR = Path(os.environ.get("HFX3D_BUNDLES_ROOT", "").strip() or (APP_DIR.parent / "bundles"))
+BUNDLE_FILES = ("meta.npz", "points.npy", "offsets.npy", "context.npy", "context_inst.npy")
+
+
+def _bundle_ready(folder: Path) -> bool:
+    return all((folder / f).exists() for f in BUNDLE_FILES)   # current-schema check
+
+
+def _find_laz(name: str):
+    p = Path(name)
+    if p.suffix.lower() in (".laz", ".las") and p.exists():
+        return p
+    roots = []
+    v = os.environ.get("HFX3D_CLOUDS_ROOT", "").strip()
+    if v:
+        roots.append(Path(v))
+    roots.append(APP_DIR.parent / "review_clouds")
+    for r in roots:
+        if not r.exists():
+            continue
+        for pat in (f"{name}.laz", f"{name}.las", f"*{name}*.laz", f"*{name}*.las"):
+            hit = next(iter(sorted(r.rglob(pat))), None)
+            if hit:
+                return hit
+    return None
+
+
+class _BuildWorker(QtCore.QThread):
+    progress = QtCore.Signal(str)
+    ok = QtCore.Signal(str)
+    fail = QtCore.Signal(str)
+
+    def __init__(self, laz, out):
+        super().__init__(); self.laz = laz; self.out = out
+
+    def run(self):
+        try:
+            import build_bundle
+            voxel = float(os.environ.get("HFX3D_CONTEXT_VOXEL", "").strip() or 0.05)
+            build_bundle.build(Path(self.laz), Path(self.out), voxel, progress=self.progress.emit)
+            self.ok.emit(str(self.out))
+        except Exception as exc:
+            import traceback; traceback.print_exc(); self.fail.emit(str(exc))
+
+
+def _ensure_bundle(laz: Path):
+    """Return a ready bundle folder for this cloud, building it (once) if needed."""
+    out = BUNDLES_DIR / laz.stem
+    if _bundle_ready(out):
+        return out
+    dlg = QtWidgets.QProgressDialog(f"Preparing {laz.stem} …", None, 0, 0)
+    dlg.setWindowTitle("Building bundle (one-time)")
+    dlg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+    dlg.setMinimumWidth(440); dlg.setAutoClose(False); dlg.setAutoReset(False)
+    dlg.show()
+    worker = _BuildWorker(laz, out)
+    state = {}
+    worker.progress.connect(lambda s: dlg.setLabelText(f"Preparing {laz.stem} (one-time)…\n\n{s}"))
+    worker.ok.connect(lambda o: state.__setitem__("out", o))
+    worker.fail.connect(lambda e: state.__setitem__("err", e))
+    loop = QtCore.QEventLoop()
+    worker.ok.connect(loop.quit); worker.fail.connect(loop.quit)
+    worker.start(); loop.exec(); worker.wait()
+    dlg.close()
+    if "err" in state:
+        QtWidgets.QMessageBox.critical(None, "Build failed",
+                                       f"Could not build bundle for {laz.stem}:\n{state['err']}")
+        return None
+    return Path(state["out"])
+
+
+def _resolve(arg):
+    if arg:
+        p = Path(arg)
+        if p.is_dir() and (p / "meta.npz").exists():
+            return p                                  # already a bundle folder
+        laz = _find_laz(arg)
+        if laz is None:
+            QtWidgets.QMessageBox.critical(None, "Functional Review",
+                                           f"No .laz found for '{arg}'. Pass a building name, a "
+                                           ".laz path, or a bundle folder.")
+            return None
+        return _ensure_bundle(laz)
+    f, _ = QtWidgets.QFileDialog.getOpenFileName(
+        None, "Open a review .laz (or a bundle's meta.npz)", str(APP_DIR.parent),
+        "Review cloud / bundle (*.laz *.las meta.npz)")
+    if not f:
+        return None
+    fp = Path(f)
+    return fp.parent if fp.name == "meta.npz" else _ensure_bundle(fp)
 
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    folder = _pick_bundle(sys.argv)
+    folder = _resolve(sys.argv[1] if len(sys.argv) > 1 else None)
     if not folder or not (folder / "meta.npz").exists():
-        QtWidgets.QMessageBox.critical(None, "Functional Review",
-                                       "Pick a bundle folder built by app/build_bundle.py")
         return
     win = MainWindow(Bundle(folder))
     win.show()

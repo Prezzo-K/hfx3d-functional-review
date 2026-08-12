@@ -71,7 +71,11 @@ def _attr_table(las, dim_names, first_by_row_order):
     return attr_names, val, conf
 
 
-def build(inp: Path, out: Path, context_voxel: float) -> dict:
+def build(inp: Path, out: Path, context_voxel: float, progress=None) -> dict:
+    def _say(msg):
+        if progress:
+            progress(msg)
+    _say("reading point cloud…")
     las = laspy.read(str(inp))
     xyz = np.column_stack((np.asarray(las.x), np.asarray(las.y),
                            np.asarray(las.z))).astype(np.float32)
@@ -81,6 +85,7 @@ def build(inp: Path, out: Path, context_voxel: float) -> dict:
     pur = np.asarray(las["purity"]).astype(np.float32) if "purity" in las.point_format.dimension_names else np.full(n, np.nan, np.float32)
 
     # sort every point by instance so each instance is a contiguous slice
+    _say(f"sorting {n:,} points by instance…")
     order = np.argsort(inst, kind="stable")
     inst_s = inst[order]
     xyz_s = xyz[order]
@@ -101,6 +106,7 @@ def build(inp: Path, out: Path, context_voxel: float) -> dict:
     sem_s = sem[order]; pur_s = pur[order]
     inst_sem = sem_s[first_rows]
     inst_pur = pur_s[first_rows]
+    _say(f"indexing {len(uids)} instances…")
     bbox = np.zeros((len(uids), 6), np.float32)
     centroid = np.zeros((len(uids), 3), np.float32)
     for k in range(len(uids)):
@@ -112,10 +118,12 @@ def build(inp: Path, out: Path, context_voxel: float) -> dict:
 
     # decimated backdrop (keep each kept point's instance_id so the app can
     # colour the whole building by an attribute)
+    _say("building backdrop…")
     ctx_idx = _voxel_indices(xyz, context_voxel)
     context = xyz[ctx_idx]
     context_inst = inst[ctx_idx].astype(np.int64)
 
+    _say("writing bundle…")
     out.mkdir(parents=True, exist_ok=True)
     np.save(out / "context.npy", context)
     np.save(out / "context_inst.npy", context_inst)
