@@ -1,14 +1,13 @@
 # HFX3D functional-attribute review app
 
-A fast, CloudCompare-free reviewer for the 15 functional attributes. It draws the
-whole building once as a grey backdrop and just swaps a small red highlight when
-you pick an instance, so browsing ~300 instances stays instant even on an
-integrated-GPU laptop. It writes the **same** `<building>__<you>.review.json` and
-`<building>__<you>.reviewed.h5` as before, so uploads and the team workflow don't
-change.
+Use this app to check the 15 functional attributes HFX3D assigned to each part of
+your building, and correct anything it got wrong. It shows the whole building in 3D
+and highlights whichever instance you pick, so you can work through the ~300
+instances quickly — even on a laptop with integrated graphics, and without
+CloudCompare.
 
-Everyone on the team runs the same two scripts in parallel, each on their own
-buildings.
+When you click **Save**, it writes your `<building>__<you>.review.json` and
+`<building>__<you>.reviewed.h5` — the two files you'll upload when you're done.
 
 ---
 

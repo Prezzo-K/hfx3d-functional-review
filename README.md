@@ -1,17 +1,15 @@
 # HFX3D functional-attribute review
 
-Human validation of HFX3D's automatic functional-attribute assignments.
-Everyone on the team uses the same repo — clone it, review your assigned
-building(s), upload the results.
+Check HFX3D's automatic functional-attribute assignments and fix what's wrong.
+Clone this repo, review your assigned building(s), and upload the results.
 
-> **Two ways to review — same output files, so uploads/workflow are identical:**
+> **You have two ways to review — both produce the same files to upload:**
 >
-> - **Standalone app (recommended, fast)** — a small PySide6/PyVista desktop
->   reviewer. Instant instance-switching even on integrated GPUs, no CloudCompare
->   needed. **See [`app/README.md`](app/README.md).** This is where active work is.
-> - **CloudCompare plugin (below)** — reviews inside CloudCompare. Works, but
->   loading 20–48M-point clouds and per-point operations are slow on big
->   buildings (a CloudCompare limitation, not fixable from the plugin).
+> - **Standalone app (recommended)** — a small desktop reviewer that switches
+>   between instances instantly, even on a laptop with integrated graphics, with no
+>   CloudCompare needed. **Start here: [`app/README.md`](app/README.md).**
+> - **CloudCompare plugin (below)** — review inside CloudCompare. It works, but
+>   big buildings (20–48 million points) are slow to load and move around.
 
 ---
 
@@ -134,7 +132,7 @@ in new processes.
 ## Start reviewing
 
 **Before your first review**, skim `ontology_rules.yaml` from the bundle Tao
-shared: <https://drive.google.com/file/d/1Wk1MZfkADI39etUeDtXXbmE1BfMc4GJ7/view?usp=drive_link>.
+shared (ask Tao for it).
 It defines what each of the 15 attributes actually means, which IFC/AAT
 standard backs it, and the geometric condition the pipeline used to suggest
 a value — that's the context your judgment call needs. The main thing to
