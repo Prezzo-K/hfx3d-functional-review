@@ -37,8 +37,20 @@ setx HFX3D_REVIEW_ROOT "C:\path\to\reviews"
   highlights in 3D and the attributes load on the right.
 - Center: **left-drag rotate, right-drag / wheel zoom, middle-drag pan** (VTK). Toggle
   "zoom to instance on select" if you'd rather keep a fixed view.
+- **Colour by** (right panel): colour the whole building by any attribute to spot
+  outliers — `val: <attr>` (green = on, grey = off, dark = not-applicable) or
+  `conf: <attr>` (blue→red; ~0.5 = the pipeline was most unsure, so your call matters
+  most). Needs a bundle built with this version (rebuild older bundles).
 - Right: tick the 15 attributes, set a flag/note, **Confirm ✓ & Next**, then **Save**
   (writes both files to `HFX3D_REVIEW_ROOT` / `HFX3D_EXPORT_ROOT`).
+
+### Fix a whole group at once (e.g. "4 windows missing `operable`")
+
+1. Filter the list: class = `window`, attribute = `operable`, **is off**.
+2. Click **Select all filtered ⭢ 3D** (or Ctrl/Shift-click a few) — every matching
+   instance highlights together in red so you can eyeball them.
+3. In **Bulk set**, pick `operable` and click **ON ⭢ sel** — it sets that attribute
+   for *all* selected instances at once and marks them reviewed. **Save**.
 
 The whole team can run this in parallel — each person their own bundles and reviews.
 

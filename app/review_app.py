@@ -57,6 +57,8 @@ class Bundle:
         self.context = np.load(self.folder / "context.npy", mmap_mode="r")
         self.points = np.load(self.folder / "points.npy", mmap_mode="r")
         self.offsets = np.load(self.folder / "offsets.npy")
+        cif = self.folder / "context_inst.npy"          # optional (older bundles)
+        self.context_inst = np.load(cif) if cif.exists() else None
         m = np.load(self.folder / "meta.npz", allow_pickle=True)
         self.ids = [int(x) for x in m["instance_id"]]
         self.sem = m["semantic_id"]
@@ -75,6 +77,7 @@ class Bundle:
             self.attr_names = []
         self.n_attr = len(self.attr_names)
         self.idpos = {iid: k for k, iid in enumerate(self.ids)}
+        self.max_id = max(self.ids) if self.ids else 0
 
     def instance_points(self, k):
         seg = np.asarray(self.points[self.offsets[k]:self.offsets[k + 1]])
@@ -257,7 +260,12 @@ class MainWindow(QtWidgets.QMainWindow):
         crow.addWidget(self.cb_unrev); crow.addWidget(self.cb_flag); crow.addWidget(self.cb_changed)
         crow.addStretch(1); lv.addLayout(crow)
         self.list = QtWidgets.QListWidget()
-        self.list.currentRowChanged.connect(self._on_list); lv.addWidget(self.list, 1)
+        self.list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.list.currentRowChanged.connect(self._on_current)       # drives the editor
+        self.list.itemSelectionChanged.connect(self._highlight_selected)  # drives 3D
+        lv.addWidget(self.list, 1)
+        b_all = QtWidgets.QPushButton("Select all filtered ⭢ 3D")
+        b_all.clicked.connect(self.list.selectAll); lv.addWidget(b_all)
         self.lbl_counter = QtWidgets.QLabel(""); lv.addWidget(self.lbl_counter)
         split.addWidget(left)
 
@@ -274,6 +282,18 @@ class MainWindow(QtWidgets.QMainWindow):
         rv.addLayout(top)
         self.cb_follow = QtWidgets.QCheckBox("zoom to instance on select"); self.cb_follow.setChecked(True)
         rv.addWidget(self.cb_follow)
+        # colour the whole building by an attribute — to spot outliers
+        cr = QtWidgets.QHBoxLayout(); cr.addWidget(QtWidgets.QLabel("Colour by"))
+        self.cb_color = QtWidgets.QComboBox()
+        self.cb_color.addItem("plain (grey)", ("hl", -1))
+        for j, nm in enumerate(self.b.attr_names):
+            self.cb_color.addItem("val: " + nm, ("val", j))
+        for j, nm in enumerate(self.b.attr_names):
+            if self.b.has_conf(j):
+                self.cb_color.addItem("conf: " + nm, ("conf", j))
+        self.cb_color.setEnabled(self.b.context_inst is not None)
+        self.cb_color.currentIndexChanged.connect(self._apply_colorby)
+        cr.addWidget(self.cb_color, 1); rv.addLayout(cr)
         self.lbl_header = QtWidgets.QLabel("Select an instance")
         self.lbl_header.setStyleSheet("font-weight:600;font-size:14px;"); rv.addWidget(self.lbl_header)
         fr = QtWidgets.QHBoxLayout(); fr.addWidget(QtWidgets.QLabel("Flag"))
@@ -295,6 +315,15 @@ class MainWindow(QtWidgets.QMainWindow):
                         ("Reset to pipeline", self._reset)]:
             b = QtWidgets.QPushButton(txt); b.clicked.connect(fn); br.addWidget(b)
         rv.addLayout(br)
+        # bulk-assign one attribute across every currently-SELECTED instance
+        bl = QtWidgets.QHBoxLayout(); bl.addWidget(QtWidgets.QLabel("Bulk set"))
+        self.cb_bulk = QtWidgets.QComboBox()
+        for j, nm in enumerate(self.b.attr_names):
+            self.cb_bulk.addItem(nm, j)
+        bl.addWidget(self.cb_bulk, 1)
+        b_on = QtWidgets.QPushButton("ON ⭢ sel"); b_on.clicked.connect(lambda: self._bulk_selected(1))
+        b_off = QtWidgets.QPushButton("OFF ⭢ sel"); b_off.clicked.connect(lambda: self._bulk_selected(0))
+        bl.addWidget(b_on); bl.addWidget(b_off); rv.addLayout(bl)
         rv.addWidget(QtWidgets.QLabel("Note"))
         self.ed_note = QtWidgets.QLineEdit(); self.ed_note.editingFinished.connect(self._on_note); rv.addWidget(self.ed_note)
         nav = QtWidgets.QPushButton("Confirm ✓ & Next ›"); nav.clicked.connect(self._confirm_next); rv.addWidget(nav)
@@ -304,12 +333,49 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_context(self):
         import pyvista as pv
-        self.plotter.add_mesh(pv.PolyData(np.asarray(self.context_pts())), color="lightgray",
+        self.plotter.add_mesh(pv.PolyData(np.asarray(self.b.context)), color="lightgray",
                               point_size=1.0, render_points_as_spheres=False, name="context")
         self.plotter.reset_camera()
 
-    def context_pts(self):
-        return self.b.context
+    def _context_scalars(self, kind, j):
+        """Per-context-point value for colour-by: instance's attr value / conf."""
+        n = len(self.b.ids)
+        if kind == "val":
+            appl = np.array([self.b.applicable(k, j) for k in range(n)])
+            per = np.where(appl, [self._attr_val(k, j) for k in range(n)], -1.0)
+        else:                                            # conf
+            per = np.array([self.b.confval(k, j) for k in range(n)], float)
+            per = np.where(per < 0, np.nan, per)         # not-applicable -> nan
+        lut = np.full(self.b.max_id + 1, np.nan)
+        lut[np.array(self.b.ids)] = per
+        scal = lut[np.clip(self.b.context_inst, 0, self.b.max_id)]
+        scal[self.b.context_inst < 0] = np.nan           # unsegmented background
+        return scal
+
+    def _apply_colorby(self):
+        import pyvista as pv
+        ctx = pv.PolyData(np.asarray(self.b.context))
+        kind, j = self.cb_color.currentData()
+        if self.b.context_inst is None or kind == "hl":
+            self.plotter.add_mesh(ctx, color="lightgray", point_size=1.0,
+                                  render_points_as_spheres=False, name="context", reset_camera=False)
+        elif kind == "val":
+            self.plotter.add_mesh(ctx, scalars=self._context_scalars("val", j), name="context",
+                                  cmap=["#3a3a3a", "#9aa0a6", "#00c853"], clim=[-1, 1], n_colors=3,
+                                  nan_color="#202020", point_size=1.6, render_points_as_spheres=False,
+                                  show_scalar_bar=False, reset_camera=False)
+        else:                                            # conf: 0.5 = most uncertain
+            self.plotter.add_mesh(ctx, scalars=self._context_scalars("conf", j), name="context",
+                                  cmap="coolwarm", clim=[0.0, 1.0], nan_color="#202020",
+                                  point_size=1.6, render_points_as_spheres=False,
+                                  scalar_bar_args={"title": f"conf: {self.b.attr_names[j]}"},
+                                  reset_camera=False)
+        self.plotter.render()
+
+    def _recolor_if_active(self, edited_j=None):
+        kind, j = self.cb_color.currentData()
+        if kind in ("val", "conf") and (edited_j is None or edited_j == j):
+            self._apply_colorby()
 
     # ── list ─────────────────────────────────────────────────────────────
     def _attr_val(self, k, j):
@@ -349,21 +415,23 @@ class MainWindow(QtWidgets.QMainWindow):
             it.setData(QtCore.Qt.UserRole, k); self.list.addItem(it)
         self._loading = False
 
-    def _on_list(self, row):
+    def _on_current(self, row):
         if self._loading or row < 0:
             return
         self.select(int(self.list.item(row).data(QtCore.Qt.UserRole)))
 
-    # ── selection ────────────────────────────────────────────────────────
+    def _selected_ks(self):
+        return [int(it.data(QtCore.Qt.UserRole)) for it in self.list.selectedItems()]
+
+    # ── editor (one instance) ────────────────────────────────────────────
     def select(self, k):
-        import pyvista as pv
         self.k = k
         rec = self.review.get(k)
-        seg = self.b.instance_points(k)
-        shown, total = len(seg), int(self.b.counts[k])
+        total = int(self.b.counts[k])
         self._loading = True
-        extra = "" if shown >= total else f"   ·   showing {shown:,} of {total:,} (display only)"
-        self.lbl_header.setText(f"Instance {self.b.ids[k]} · {self.b.cls(k)} · {total:,} pts{extra}")
+        nsel = len(self.list.selectedItems())
+        selnote = f"    ·    {nsel} selected (bulk-set applies to all)" if nsel > 1 else ""
+        self.lbl_header.setText(f"Instance {self.b.ids[k]} · {self.b.cls(k)} · {total:,} pts{selnote}")
         self.cmb_flag.setCurrentIndex(max(0, self.cmb_flag.findData(rec["instance_flag"])))
         self.ed_note.setText(rec["note"])
         confs = []
@@ -376,13 +444,44 @@ class MainWindow(QtWidgets.QMainWindow):
             confs.append(f"{self.b.attr_names[j]}={cv:.2f}" if appl and np.isfinite(cv) else "")
         self.lbl_conf.setText("pipeline conf:  " + "  ".join(c for c in confs if c))
         self._loading = False
-        # 3D highlight — swap a small actor; the big context stays put
-        self.plotter.add_mesh(pv.PolyData(seg), color="red", point_size=4.0,
-                              render_points_as_spheres=False, name="hl")
+
+    # ── 3D highlight (all selected instances) ────────────────────────────
+    def _highlight_selected(self):
+        import pyvista as pv
+        if self._loading:                          # ignore churn during list rebuild
+            return
+        ks = self._selected_ks()
+        if not ks:
+            try:
+                self.plotter.remove_actor("hl")
+            except Exception:
+                pass
+            self.plotter.render(); return
+        pts = np.concatenate([self.b.instance_points(k) for k in ks])
+        if len(pts) > HL_DISPLAY_CAP:
+            pts = pts[::len(pts) // HL_DISPLAY_CAP + 1]
+        self.plotter.add_mesh(pv.PolyData(pts), color="red", point_size=4.0,
+                              render_points_as_spheres=False, name="hl", reset_camera=False)
         if self.cb_follow.isChecked():
-            bb = self.b.bbox[k]
-            self.plotter.reset_camera(bounds=[bb[0], bb[3], bb[1], bb[4], bb[2], bb[5]])
+            bb = self.b.bbox[np.asarray(ks)]
+            mn, mx = bb[:, :3].min(0), bb[:, 3:].max(0)
+            self.plotter.reset_camera(bounds=[mn[0], mx[0], mn[1], mx[1], mn[2], mx[2]])
         self.plotter.render()
+
+    def _bulk_selected(self, val):
+        """Set one attribute ON/OFF for EVERY selected instance at once."""
+        j = self.cb_bulk.currentData()
+        ks = self._selected_ks()
+        if j is None or not ks:
+            return
+        for k in ks:
+            self.review.get(k)["vector_human"][j] = val
+            self.review.mark(k, True)
+            self._update_row(k)
+        self.review.dirty = True
+        if self.k in ks:
+            self.select(self.k)                    # refresh the editor checkboxes
+        self._recolor_if_active(j); self._refresh_counter()
 
     # ── edits ────────────────────────────────────────────────────────────
     def _touch(self):
@@ -393,7 +492,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._loading or self.k is None:
             return
         self.review.get(self.k)["vector_human"][j] = 1 if self.checks[j].isChecked() else 0
-        self.review.dirty = True; self._touch(); self._refresh_counter()
+        self.review.dirty = True; self._touch(); self._recolor_if_active(j); self._refresh_counter()
 
     def _bulk(self, v):
         if self.k is None:
@@ -401,7 +500,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rec = self.review.get(self.k)
         for j in range(self.b.n_attr):
             rec["vector_human"][j] = v
-        self.review.dirty = True; self._touch(); self.select(self.k); self._refresh_counter()
+        self.review.dirty = True; self._touch(); self.select(self.k)
+        self._recolor_if_active(); self._refresh_counter()
 
     def _reset(self):
         if self.k is None:
@@ -409,7 +509,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rec = self.review.get(self.k)
         for j in range(self.b.n_attr):
             rec["vector_human"][j] = self.b.pipeline(self.k, j)
-        self.review.dirty = True; self._touch(); self.select(self.k); self._refresh_counter()
+        self.review.dirty = True; self._touch(); self.select(self.k)
+        self._recolor_if_active(); self._refresh_counter()
 
     def _on_flag(self):
         if self._loading or self.k is None:

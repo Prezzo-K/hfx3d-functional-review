@@ -110,12 +110,15 @@ def build(inp: Path, out: Path, context_voxel: float) -> dict:
 
     attr_names, val, conf = _attr_table(las, las.point_format.dimension_names, order[first_rows])
 
-    # decimated backdrop
+    # decimated backdrop (keep each kept point's instance_id so the app can
+    # colour the whole building by an attribute)
     ctx_idx = _voxel_indices(xyz, context_voxel)
     context = xyz[ctx_idx]
+    context_inst = inst[ctx_idx].astype(np.int64)
 
     out.mkdir(parents=True, exist_ok=True)
     np.save(out / "context.npy", context)
+    np.save(out / "context_inst.npy", context_inst)
     np.save(out / "points.npy", points)
     np.save(out / "offsets.npy", offsets)
     meta = dict(instance_id=uids.astype(np.int64), semantic_id=inst_sem,
