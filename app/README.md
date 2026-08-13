@@ -131,7 +131,7 @@ review from colliding with a teammate's review of the same building.
 ## 6. Prep buildings ahead of time (optional)
 
 The app auto-prepares a building on first open, but you can build the bundles up
-front (e.g. overnight, before handing them out):
+front:
 
 ```powershell
 .\.app-venv\Scripts\python app\build_bundle.py review_clouds\train\HFX_BLD001_ZEB_CLEAN.laz --out bundles\HFX_BLD001
