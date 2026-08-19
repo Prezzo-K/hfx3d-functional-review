@@ -370,7 +370,9 @@ class MainWindow(QtWidgets.QMainWindow):
         bl.addWidget(b_on); bl.addWidget(b_off); rv.addLayout(bl)
         rv.addWidget(QtWidgets.QLabel("Note"))
         self.ed_note = QtWidgets.QLineEdit(); self.ed_note.editingFinished.connect(self._on_note); rv.addWidget(self.ed_note)
-        nav = QtWidgets.QPushButton("Confirm ✓ & Next ›"); nav.clicked.connect(self._confirm_next); rv.addWidget(nav)
+        nav = QtWidgets.QPushButton("Confirm ✓ & Next ›")
+        nav.setToolTip("Mark all selected instances reviewed, then go to the next unreviewed")
+        nav.clicked.connect(self._confirm_next); rv.addWidget(nav)
         rv.addStretch(1)
         split.addWidget(right)
         split.setSizes([260, 760, 300])
@@ -568,18 +570,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.review.get(self.k)["note"] = self.ed_note.text(); self.review.dirty = True
 
     def _confirm_next(self):
-        if self.k is not None:
-            self.review.mark(self.k, True); self._update_row(self.k); self._refresh_counter()
+        # confirm EVERY selected instance (or just the current one if none/one
+        # is selected), then jump to the next still-unreviewed instance
+        ks = self._selected_ks() or ([self.k] if self.k is not None else [])
+        for k in ks:
+            self.review.mark(k, True); self._update_row(k)
+        self._refresh_counter()
         vis = self._visible()
         if not vis:
             return
         nxt = next((k for k in vis if not self.review.is_reviewed(k)), None)
-        if nxt is None:
-            cur = vis.index(self.k) if self.k in vis else -1
-            nxt = vis[(cur + 1) % len(vis)]
+        if nxt is None:                              # nothing left unreviewed → step past
+            anchor = self.k if self.k in vis else (ks[-1] if ks and ks[-1] in vis else vis[-1])
+            nxt = vis[(vis.index(anchor) + 1) % len(vis)]
+        self._goto(nxt)
+
+    def _goto(self, k):
         for r in range(self.list.count()):
-            if int(self.list.item(r).data(QtCore.Qt.UserRole)) == nxt:
-                self.list.setCurrentRow(r); return
+            if int(self.list.item(r).data(QtCore.Qt.UserRole)) == k:
+                self.list.setCurrentRow(r)          # single-selects k (clears the batch)
+                return
 
     def _update_row(self, k):
         for r in range(self.list.count()):

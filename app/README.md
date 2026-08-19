@@ -92,8 +92,9 @@ The window has three columns: **instance list** (left), **3D view** (center),
   instance** at once (see the group workflow below).
 - **Flag** (`bad_segmentation` / `wrong_class` / `other`) and **Note** — for
   instances that themselves look wrong.
-- **Confirm ✓ & Next** — mark this instance reviewed and jump to the next one that
-  isn't. **Save** writes your two files.
+- **Confirm ✓ & Next** — mark the current instance reviewed and jump to the next
+  one that isn't. If you've **multi-selected** several instances, it confirms **all
+  of them** at once, then moves on. **Save** writes your two files.
 
 ---
 
