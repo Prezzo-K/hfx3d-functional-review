@@ -149,8 +149,10 @@ class ReviewStore:
         self.dirty = False
         self.records = {}
         self.path = self._json_path()
+        self.loaded_from = None                     # the file we actually loaded, if any
         if self.path.exists():
             self._load()
+            self.loaded_from = self.path
 
     def _json_path(self):
         return self.review_root / f"{self.b.building}__{_safe(self.reviewer)}.review.json"
@@ -186,6 +188,24 @@ class ReviewStore:
                 "status": v.get("status", "unreviewed"),
                 "vector_human": [int(x) for x in v["vector_human"]],
                 "instance_flag": v.get("instance_flag", ""), "note": v.get("note", "")}
+
+    def merge_from(self, path):
+        """Pull in records from another review file for instances we haven't
+        touched this session (current session wins on any conflict)."""
+        try:
+            d = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        added = 0
+        for k, v in d.get("instances", {}).items():
+            iid = int(k)
+            if iid not in self.records:
+                self.records[iid] = {
+                    "status": v.get("status", "unreviewed"),
+                    "vector_human": [int(x) for x in v["vector_human"]],
+                    "instance_flag": v.get("instance_flag", ""), "note": v.get("note", "")}
+                added += 1
+        return added
 
     def save(self):
         b = self.b
@@ -306,8 +326,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_counter = QtWidgets.QLabel(""); lv.addWidget(self.lbl_counter)
         split.addWidget(left)
 
-        # center: 3D view
+        # center: 3D view. Remap mouse: left-drag = rotate, right-drag = PAN
+        # (move sideways), middle-drag = pan, wheel = zoom. (VTK's default maps
+        # right-drag to zoom, which the reviewer didn't want.)
         self.plotter = QtInteractor()
+        self._set_pan_on_right()
         split.addWidget(self.plotter.interactor)
 
         # right: editor
@@ -376,6 +399,28 @@ class MainWindow(QtWidgets.QMainWindow):
         rv.addStretch(1)
         split.addWidget(right)
         split.setSizes([260, 760, 300])
+
+    def _set_pan_on_right(self):
+        """Left-drag rotates, right-drag pans (sideways), wheel zooms."""
+        try:                                          # PyVista >= 0.43
+            self.plotter.enable_custom_trackball_style(
+                left="rotate", middle="pan", right="pan")
+            return
+        except Exception:
+            pass
+        try:                                          # fallback: VTK subclass
+            import vtk
+
+            class _RightPan(vtk.vtkInteractorStyleTrackballCamera):
+                def OnRightButtonDown(self):
+                    self.StartPan()
+
+                def OnRightButtonUp(self):
+                    self.EndPan()
+
+            self.plotter.iren.interactor.SetInteractorStyle(_RightPan())
+        except Exception as exc:
+            print("could not remap right-drag to pan:", exc)
 
     def _add_context(self):
         import pyvista as pv
@@ -624,8 +669,35 @@ class MainWindow(QtWidgets.QMainWindow):
                                           "stamped into your files so reviews don't collide.")
             return
         self.review.reviewer = name
+        # Safeguard: about to write over a review file we did NOT load this
+        # session (e.g. reviewer changed the Save-to folder or their name, and a
+        # file already exists there). Overwriting it would discard that work.
+        target = self.review._json_path()
+        lf = self.review.loaded_from
+        is_our_file = lf is not None and lf.exists() and target.resolve() == lf.resolve()
+        if target.exists() and not is_our_file:
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+            box.setWindowTitle("A review file already exists here")
+            box.setText(f"{target}\n\nalready exists and was NOT loaded this session.")
+            box.setInformativeText(
+                "Overwriting it will discard whatever review work is already in that "
+                "file. You can instead merge (keep both — your current edits win on "
+                "any instance you both changed).")
+            b_merge = box.addButton("Merge (keep both)", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            b_over = box.addButton("Overwrite", QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton("Cancel", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(b_merge)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is b_merge:
+                added = self.review.merge_from(target)
+                print(f"merged {added} instances from existing {target}")
+            elif clicked is not b_over:
+                return                                # Cancel → don't save
         self._persist_settings()
-        p = self.review.save(); self._refresh_counter()
+        p = self.review.save(); self.review.loaded_from = p   # now this is our file
+        self._refresh_counter()
         msg = f"Saved:\n{p}"
         try:
             h5 = self.review.export_h5(); msg += f"\n{h5}"

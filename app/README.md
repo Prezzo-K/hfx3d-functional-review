@@ -68,7 +68,8 @@ The window has three columns: **instance list** (left), **3D view** (center),
 
 ### Center — look at it in 3D
 
-- **Left-drag** rotate · **wheel / right-drag** zoom · **middle-drag** pan.
+- **Left-drag** rotate · **right-drag / middle-drag** pan (move sideways any
+  direction) · **wheel** zoom.
 - The grey cloud is the whole building (a lightweight overview). Selected
   instances light up **red**; when several are selected they all light up together.
 - **"zoom to instance on select"** (right panel) frames each pick automatically —
@@ -157,6 +158,14 @@ so you normally never touch env vars. If you prefer them, these still work (in a
 
 ## Notes
 
+- **Continuing later:** reopen the same building with the same reviewer name and
+  Save-to folder and your previous review loads automatically — keep editing and
+  Save; it rewrites the file with your previous work **plus** the new edits (never
+  a blind wipe).
+- **Overwrite guard:** if you Save into a folder that already has a review file you
+  did *not* load this session (e.g. you changed your name or the Save-to folder),
+  the app warns and offers **Merge (keep both)** / **Overwrite** / **Cancel** so you
+  can't silently clobber existing review work.
 - A bundle's `points.npy` is the full-resolution cloud (100–500 MB); it's
   memory-mapped, never fully loaded into RAM. Very large instances are subsampled
   **for display only** — your saved review data is always full/unchanged.
