@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -227,6 +228,25 @@ class ReviewStore:
                 added += 1
         return added
 
+    def load_seed(self, path):
+        """Pre-fill records from a part-1 seed (vectors + flags + notes) so the
+        reviewer starts from the validated state. Does NOT set loaded_from, so
+        the reviewer's first Save writes to their own file, not the seed."""
+        try:
+            d = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        added = 0
+        for k, v in d.get("instances", {}).items():
+            iid = int(k)
+            if iid not in self.records:
+                self.records[iid] = {
+                    "status": v.get("status", "unreviewed"),
+                    "vector_human": [int(x) for x in v["vector_human"]],
+                    "instance_flag": v.get("instance_flag", ""), "note": v.get("note", "")}
+                added += 1
+        return added
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, bundle: Bundle):
@@ -240,6 +260,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.review = ReviewStore(bundle.building, _cfg_reviewer(),
                                   self._default_vec, bundle.n_attr)
         self._maybe_load_edits()
+        self._maybe_load_seed()
         self.setWindowTitle(f"Functional Review — {bundle.building}")
         self.resize(1320, 820)
         self._build()
@@ -302,6 +323,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.em.load_edits(p)
             except Exception as exc:
                 print("could not load prior edits:", exc)
+
+    def _maybe_load_seed(self):
+        """If this reviewer has no file yet, seed from the part-1 review
+        (seed.review.json staged into the bundle) so flags/notes/vectors show."""
+        if self.review.loaded_from is not None:
+            return
+        seed = self.b.folder / "seed.review.json"
+        if seed.exists():
+            n = self.review.load_seed(seed)
+            if n:
+                print(f"loaded {n} instances from part-1 seed {seed}")
 
     # ── UI ───────────────────────────────────────────────────────────────
     def _build(self):
@@ -548,7 +580,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _row_text(self, iid):
         mark = "✓ " if self.review.is_reviewed(iid) else "   "
         star = "✎" if iid in self.em.edited else " "
-        return f"{mark}{star} #{iid}  {self._cls(iid)}  ({self._count(iid):,} pts)"
+        flagged = bool((self.review.records.get(iid) or {}).get("instance_flag"))
+        flag = "⚑" if flagged else " "
+        return f"{mark}{star}{flag} #{iid}  {self._cls(iid)}  ({self._count(iid):,} pts)"
 
     def _refresh_list(self):
         self._loading = True
@@ -1189,9 +1223,21 @@ class _BuildWorker(QtCore.QThread):
             import traceback; traceback.print_exc(); self.fail.emit(str(exc))
 
 
+def _stage_seed(laz: Path, out: Path):
+    """Copy a sibling part-1 seed (<name>.part1.json) into the bundle so the
+    review app can pre-fill flags/notes/vectors from validation part one."""
+    seed = laz.parent / (laz.stem + ".part1.json")
+    if seed.exists():
+        try:
+            shutil.copyfile(seed, out / "seed.review.json")
+        except Exception as exc:
+            print("could not stage part-1 seed:", exc)
+
+
 def _ensure_bundle(laz: Path):
     out = BUNDLES_DIR / laz.stem
     if _bundle_ready(out):
+        _stage_seed(laz, out)
         return out
     dlg = QtWidgets.QProgressDialog(f"Preparing {laz.stem} …", None, 0, 0)
     dlg.setWindowTitle("Building bundle (one-time)")
@@ -1211,6 +1257,7 @@ def _ensure_bundle(laz: Path):
         QtWidgets.QMessageBox.critical(None, "Build failed",
                                        f"Could not build bundle for {laz.stem}:\n{state['err']}")
         return None
+    _stage_seed(laz, out)
     return Path(state["out"])
 
 

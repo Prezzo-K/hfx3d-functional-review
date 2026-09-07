@@ -11,6 +11,13 @@ are sometimes wrong. This round is about fixing those. So on top of confirming t
 attributes, you now also correct the instance itself: give it the right class, split
 it if it should be more than one object, or merge pieces that belong together.
 
+## Where this data comes from
+
+These files are built on top of validation part one. The attributes you see on each
+instance are already the part-one corrected values, not the raw pipeline guesses. So
+you are not starting from scratch. You are continuing from what was already validated,
+and your job here is mainly the segmentation and class fixes on top of that.
+
 ## Before you start
 
 Open each building one at a time. Look at it next to the imagery for that building
@@ -32,6 +39,23 @@ shape you think is a window might not be one. Before you change anything, confir
 the object really is against the building imagery, and if that is not clear enough use
 Google Maps or Apple Maps. Only make the fix once you are sure. Eyeballing it and
 assuming is how mistakes get in.
+
+## Part-one flags and notes
+
+Some instances already carry a flag from part one, shown with a small flag mark in the
+list, and some carry a note. These come from the first round, where reviewers marked
+instances they thought had the wrong class or bad segmentation and wrote down why. Use
+the "flagged" filter to jump straight to them.
+
+Read the notes. A note like "this should be a window" tells you exactly what to fix, and
+the flags point you at the problems part one already spotted. They are the best starting
+hints for where the segmentation issues are.
+
+But they are not the full list. Part one was focused on the attributes, so not every
+segmentation or class error was caught, and some buildings were not flagged at all. Do
+not only fix the flagged ones. Go through every instance, class by class, and check it
+yourself. The flags and notes point you at the known problems. You are here to find the
+rest too.
 
 ## The three things to fix
 
