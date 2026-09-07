@@ -20,6 +20,12 @@ and your job here is mainly the segmentation and class fixes on top of that.
 
 ## Before you start
 
+> **IMPORTANT — delete your old bundle first.** If you opened one of these buildings
+> in the app before, delete its old bundle folder (`bundles/<building_name>`) before you
+> start, or the app will reuse the old version and you will NOT see the part-one
+> attributes, flags, or notes. Once deleted, the app rebuilds it automatically from the
+> new cloud the first time you open it.
+
 Open each building one at a time. Look at it next to the imagery for that building
 (the photos are on the AI server, in the usual place). If the photos are not clear
 enough, open the building in Google Maps or Apple Maps and use their street/aerial
