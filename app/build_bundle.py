@@ -8,6 +8,8 @@ and writes a small folder the review app opens instantly and browses instantly:
     <out>/context.npy    decimated whole-building xyz backdrop (~1-2M pts, float32)
     <out>/points.npy     ALL points' xyz, SORTED BY instance_id (memmap; float32)
     <out>/offsets.npy    CSR start/end into points.npy per instance (int64)
+    <out>/src_index.npy  each points.npy row's ORIGINAL row in the source cloud (int64)
+                         — lets the review app write corrected labels back to the LAZ
     <out>/meta.npz       per-instance: instance_id, semantic_id, purity, point_count,
                          bbox, centroid, attribute_names, val (n,15), conf (n,15)
 
@@ -100,6 +102,7 @@ def build(inp: Path, out: Path, context_voxel: float, progress=None) -> dict:
     lo = int(starts.min()) if len(starts) else 0
     hi = int(ends.max()) if len(ends) else 0
     points = xyz_s[lo:hi]
+    src_index = order[lo:hi].astype(np.int64)        # points.npy row -> source cloud row
     offsets = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)  # into `points`
 
     # per-instance metadata
@@ -129,6 +132,7 @@ def build(inp: Path, out: Path, context_voxel: float, progress=None) -> dict:
     np.save(out / "context_inst.npy", context_inst)
     np.save(out / "points.npy", points)
     np.save(out / "offsets.npy", offsets)
+    np.save(out / "src_index.npy", src_index)
     meta = dict(instance_id=uids.astype(np.int64), semantic_id=inst_sem,
                 purity=inst_pur, point_count=counts.astype(np.int64),
                 bbox=bbox, centroid=centroid,
