@@ -75,6 +75,13 @@ rest too.
    them and Merge. Match the colours and watch the planes to be sure the pieces
    really belong to the same object.
 
+## Leftover (unsegmented) points
+
+A few points in each building were never assigned to any object. They show up as one
+entry in the list called **unsegmented** (id -1). If some of those points really belong
+to an object, select `unsegmented`, lasso that cluster, and either split it into its own
+instance or merge it into the object it belongs to.
+
 ## Where the tools are and how they work
 
 - **Class dropdown** (right panel, next to the Flag box). Pick the correct class for

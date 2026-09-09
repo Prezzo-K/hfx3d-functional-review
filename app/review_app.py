@@ -284,6 +284,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Applicable? Use the pipeline's exact encoding while the class is
         unchanged (zero regression vs v1); switch to the ontology once an
         instance is reclassed or is brand-new (a split child)."""
+        if self._cls(iid) == "unsegmented":
+            return False                             # no attributes on leftover points
         k = self._k(iid)
         if k is not None and self.em.sem.get(iid) == int(self.b.sem[k]):
             return self.b.applicable_k(k, j)

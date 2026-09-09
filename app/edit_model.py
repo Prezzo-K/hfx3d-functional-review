@@ -52,7 +52,9 @@ CLASS_APPLICABLE = {
 
 
 def sem_name(sid: int) -> str:
-    return SEM_NAMES[sid] if 0 <= sid < len(SEM_NAMES) else "?"
+    if sid < 0:
+        return "unsegmented"                     # background / leftover points
+    return SEM_NAMES[sid] if sid < len(SEM_NAMES) else "?"
 
 
 class EditModel:
@@ -147,7 +149,10 @@ class EditModel:
         ids = [int(i) for i in ids if i in self.rows]
         if len(ids) < 2:
             return ids[0] if ids else None
-        dst = max(ids, key=lambda i: len(self.rows[i]))   # dominant by point count
+        # survivor = dominant by point count, but never the background (-1):
+        # merging unsegmented points into an object should keep the object.
+        pool = [i for i in ids if i >= 0] or ids
+        dst = max(pool, key=lambda i: len(self.rows[i]))
         gone = [i for i in ids if i != dst]
         self._undo.append(self._snapshot(ids))
         merged = np.concatenate([self.rows[i] for i in ids])

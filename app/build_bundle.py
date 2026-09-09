@@ -91,24 +91,22 @@ def build(inp: Path, out: Path, context_voxel: float, progress=None) -> dict:
     order = np.argsort(inst, kind="stable")
     inst_s = inst[order]
     xyz_s = xyz[order]
+    # Collapse any negative ids to a single -1 "unsegmented" instance and KEEP
+    # it, so the reviewer can select those leftover points and rescue them into
+    # a real instance (split/merge). Background is tiny (~0.01% of points).
+    if np.any(inst_s < 0):
+        inst_s = np.where(inst_s < 0, -1, inst_s)
     uids, starts, counts = np.unique(inst_s, return_index=True, return_counts=True)
-    keep = uids >= 0
-    uids, starts, counts = uids[keep], starts[keep], counts[keep]
-    ends = starts + counts
-    # offsets are into the (background-stripped) contiguous region; realign so
-    # points.npy holds only real instances back-to-back
     first_rows = starts                                   # first point of each instance in sorted order
-    # build compact points array (drop background id<0 up front)
-    lo = int(starts.min()) if len(starts) else 0
-    hi = int(ends.max()) if len(ends) else 0
-    points = xyz_s[lo:hi]
-    src_index = order[lo:hi].astype(np.int64)        # points.npy row -> source cloud row
+    points = xyz_s                                        # ALL points (incl. -1 background)
+    src_index = order.astype(np.int64)                    # points.npy row -> source cloud row
     offsets = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)  # into `points`
 
     # per-instance metadata
     sem_s = sem[order]; pur_s = pur[order]
     inst_sem = sem_s[first_rows]
     inst_pur = pur_s[first_rows]
+    inst_sem[uids < 0] = -1                                # background -> "unsegmented"
     _say(f"indexing {len(uids)} instances…")
     bbox = np.zeros((len(uids), 6), np.float32)
     centroid = np.zeros((len(uids), 3), np.float32)
