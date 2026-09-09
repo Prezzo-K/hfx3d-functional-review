@@ -255,6 +255,16 @@ class EditModel:
         self.order = [int(i) for i in d["order"]]
         self.edited = set(int(i) for i in d["edited"])
         self.next_id = int(d["next_id"])
+        # Reconcile any instance present in the rebuilt rows but missing from the
+        # saved order — e.g. the -1 "unsegmented" group added by a newer bundle
+        # format that didn't exist when these edits were saved.
+        bpos = {int(i): k for k, i in enumerate(self.b.ids)}
+        for iid in list(self.rows):
+            if iid not in self.sem:
+                k = bpos.get(iid)
+                self.sem[iid] = int(self.b.sem[k]) if k is not None else -1
+            if iid not in self.order:
+                self.order.append(iid)
         self.log = []                    # provenance log lives in the .review.json
         self._undo = []
 

@@ -267,6 +267,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_context()
         self._refresh_list()
         self._refresh_counter()
+        self._start_update_check()
 
     # ── iid-keyed geometry/attribute helpers ─────────────────────────────
     def _k(self, iid):
@@ -998,6 +999,24 @@ class MainWindow(QtWidgets.QMainWindow):
         _CFG["export_root"] = str(self.review.export_root)
         _save_cfg(_CFG)
 
+    def _start_update_check(self):
+        """Warn (small status-bar note) if this checkout is behind origin/main."""
+        repo = APP_DIR.parent
+        if not (repo / ".git").exists():
+            return
+        self.lbl_update = QtWidgets.QLabel("")
+        self.statusBar().addPermanentWidget(self.lbl_update)
+        self._upd = _UpdateChecker(repo)
+        self._upd.result.connect(self._on_update_result)
+        self._upd.start()
+
+    def _on_update_result(self, behind):
+        if behind and hasattr(self, "lbl_update"):
+            self.lbl_update.setText("  ⚠ App update available — close and run: git pull  ")
+            self.lbl_update.setStyleSheet("color:#b26a00; font-weight:600;")
+            self.lbl_update.setToolTip("A newer version is on the server. Save your work, "
+                                       "close the app, run 'git pull', then reopen.")
+
     # ── save / export ────────────────────────────────────────────────────
     def _save_json(self):
         b = self.b
@@ -1205,6 +1224,34 @@ def _find_laz(name: str):
             if hit:
                 return hit
     return None
+
+
+class _UpdateChecker(QtCore.QThread):
+    """Quietly checks whether the local checkout is behind origin/main and, if
+    so, tells the reviewer to pull. Runs off the UI thread; fails silent when
+    git is missing, offline, or this isn't a git checkout."""
+    result = QtCore.Signal(bool)
+
+    def __init__(self, repo):
+        super().__init__(); self.repo = str(repo)
+
+    def run(self):
+        try:
+            import subprocess
+
+            def g(*a):
+                return subprocess.run(["git", "-C", self.repo, *a],
+                                      capture_output=True, text=True, timeout=15)
+            g("fetch", "--quiet")
+            head = g("rev-parse", "HEAD").stdout.strip()
+            rem = g("rev-parse", "origin/main").stdout.strip()
+            if not head or not rem or head == rem:
+                self.result.emit(False); return
+            # behind == our HEAD is an ancestor of origin/main
+            anc = g("merge-base", "--is-ancestor", "HEAD", "origin/main")
+            self.result.emit(anc.returncode == 0)
+        except Exception:
+            self.result.emit(False)
 
 
 class _BuildWorker(QtCore.QThread):

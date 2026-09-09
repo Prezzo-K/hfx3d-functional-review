@@ -97,9 +97,18 @@ def build(inp: Path, out: Path, context_voxel: float, progress=None) -> dict:
     if np.any(inst_s < 0):
         inst_s = np.where(inst_s < 0, -1, inst_s)
     uids, starts, counts = np.unique(inst_s, return_index=True, return_counts=True)
-    first_rows = starts                                   # first point of each instance in sorted order
-    points = xyz_s                                        # ALL points (incl. -1 background)
-    src_index = order.astype(np.int64)                    # points.npy row -> source cloud row
+    # Lay out the REAL instances first, exactly as older (background-stripped)
+    # bundles did, and APPEND the -1 group at the end. This keeps every real
+    # point's row index unchanged, so a reviewer's saved edits (which reference
+    # points.npy rows) stay valid across a rebuild.
+    neg = uids < 0
+    bg_n = int(counts[neg].sum())                         # background points, sorted first
+    uids = np.concatenate([uids[~neg], uids[neg]])        # real…, then -1 (if any)
+    counts = np.concatenate([counts[~neg], counts[neg]])
+    first_rows = np.concatenate([starts[~neg], starts[neg]])
+    # sorted order is [bg block][real block]; reassemble as [real block][bg block]
+    points = np.concatenate([np.asarray(xyz_s[bg_n:]), np.asarray(xyz_s[:bg_n])])
+    src_index = np.concatenate([order[bg_n:], order[:bg_n]]).astype(np.int64)
     offsets = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)  # into `points`
 
     # per-instance metadata
