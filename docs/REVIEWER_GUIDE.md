@@ -46,6 +46,20 @@ the object really is against the building imagery, and if that is not clear enou
 Google Maps or Apple Maps. Only make the fix once you are sure. Eyeballing it and
 assuming is how mistakes get in.
 
+## Finding instances in the list
+
+- **Search box:** type an id or a class name. You can look up several at once by
+  separating them with commas, for example `12, 45, 80`, or mix in a class like
+  `12, blinds`.
+- **Filter checkboxes** above the list:
+  - **unreviewed** hides the ones you already confirmed.
+  - **flagged** shows only instances that carry a part-one flag.
+  - **changed** shows only instances whose attributes differ from what came in.
+  - **recent** shows the last instances you edited, most recent first, so you can
+    jump straight back to what you were just working on.
+- **Confirm ✓ & Next** marks the selected instance reviewed and moves you forward to
+  the next one, so you can work through a building in order without losing your place.
+
 ## Part-one flags and notes
 
 Some instances already carry a flag from part one, shown with a small flag mark in the
@@ -134,6 +148,10 @@ There are two buttons and they do different things:
   time. You only need it if someone asks for the corrected cloud. It is not part of
   the normal upload, so do not run it every time.
 
+When you Save, if any instance still has applicable attributes but none turned on, the
+app warns you and lists those instance numbers. Go back and check them, or continue
+anyway if they really have none.
+
 ## When you are done
 
 Save your work, then upload to the AI server, in the same place we use for the reviews:
@@ -148,3 +166,5 @@ That is the output of this round.
 - Left-drag rotates, right-drag pans, wheel zooms.
 - Ctrl+Z or the Undo button reverses your last reclass, split, or merge.
 - Always confirm against the imagery or maps before you change a class or split.
+- If the status bar shows "App update available", save your work, close the app, run
+  `git pull`, then reopen so you have the latest version.
