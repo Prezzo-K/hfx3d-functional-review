@@ -11,6 +11,12 @@ Clone this repo, review your assigned building(s), and upload the results.
 > - **CloudCompare plugin (below)** — review inside CloudCompare. It works, but
 >   big buildings (20–48 million points) are slow to load and move around.
 
+> **Doing Validation Part Two (segmentation fixes)?** That round also corrects the
+> segmentation itself — reclass an instance's class, split one into parts, merge
+> pieces, and rescue unsegmented points — which is **only in the standalone app**,
+> not the CloudCompare plugin. Use the app and follow the step-by-step
+> **[`docs/REVIEWER_GUIDE.md`](docs/REVIEWER_GUIDE.md)**.
+
 ---
 
 ## One-time setup

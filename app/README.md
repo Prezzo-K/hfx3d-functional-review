@@ -9,6 +9,13 @@ CloudCompare.
 When you click **Save**, it writes your `<building>__<you>.review.json` and
 `<building>__<you>.reviewed.h5` — the two files you'll upload when you're done.
 
+> **Validation Part Two (segmentation fixes):** the app now also corrects the
+> segmentation, not just the attributes — **reclass** an instance's class, **lasso
+> split** one into parts, **merge** pieces together, rescue **unsegmented (-1)**
+> points, and **undo** (Ctrl+Z). If you're on Part Two, follow the step-by-step
+> **[`docs/REVIEWER_GUIDE.md`](../docs/REVIEWER_GUIDE.md)**, and **delete your old
+> `bundles/<building>` folder** after updating so the new data loads.
+
 ---
 
 ## 1. Setup (once per machine)
@@ -56,13 +63,15 @@ The window has three columns: **instance list** (left), **3D view** (center),
 
 ### Left — find the instance(s) you want
 
-- **Search box** — type an id or class name.
+- **Search box** — type an id or class name; separate several with commas to look
+  up a list at once (e.g. `12, 45, 80`, or mix in a class like `12, blinds`).
 - **Class filter** — show only `window`, `wall`, `stairs`, …
 - **Attribute filter** — pick an attribute + **is on / is off** to show only
   instances that (don't) have it. e.g. `operable` + *is off* → every instance
   missing `operable`.
-- **unreviewed / flagged / changed** — narrow to what still needs work, what you
-  flagged, or what you've edited away from the pipeline.
+- **unreviewed / flagged / changed / recent** — narrow to what still needs work,
+  what you (or Part 1) flagged, what you've edited away from the pipeline, or the
+  last instances you edited (most recent first) to get back to where you were.
 - Click a row to review it. The list is **multi-select** (Ctrl/Shift-click), and
   **Select all filtered ⭢ 3D** grabs the whole filtered set at once.
 
@@ -120,13 +129,16 @@ attribute filter + bulk-set to fix them.
 
 ## 5. Where your files go / upload
 
-**Save** writes both files to your chosen **Save to** folder:
+**Save** writes to your chosen **Save to** folder:
 
 - `<building>__<you>.review.json`
 - `<building>__<you>.reviewed.h5`
+- if you made segmentation edits: `<building>__<you>.edits.json` and `.edits.npz`
 
-Upload **both**, exactly as in the main README. Your name in the filename keeps your
-review from colliding with a teammate's review of the same building.
+Upload those. Your name in the filename keeps your review from colliding with a
+teammate's review of the same building. (The heavy `.corrected.laz` from the
+**Export corrected .laz** button is optional and only needed if someone asks for the
+corrected point cloud.)
 
 ---
 
