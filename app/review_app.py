@@ -345,7 +345,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # left: instance list + filters
         left = QtWidgets.QWidget(); lv = QtWidgets.QVBoxLayout(left)
-        self.ed_search = QtWidgets.QLineEdit(); self.ed_search.setPlaceholderText("search id / class…")
+        self.ed_search = QtWidgets.QLineEdit(); self.ed_search.setPlaceholderText("search id / class  (comma = multiple, e.g. 12, 45, 80)")
         self.ed_search.textChanged.connect(self._refresh_list); lv.addWidget(self.ed_search)
         self.cb_class = QtWidgets.QComboBox(); self.cb_class.addItem("all classes", "")
         for c in SEM_NAMES:
@@ -560,8 +560,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self._apply_colorby()
 
     # ── list ─────────────────────────────────────────────────────────────
+    def _search_ok(self, iid, tokens, multi):
+        """Match against the search box. Supports a comma-separated list of
+        ids/classes (e.g. '12, 45, blinds'); numeric tokens match the id (exact
+        when several are given, substring for a single one)."""
+        if not tokens:
+            return True
+        idstr = str(iid); clsl = self._cls(iid).lower()
+        for t in tokens:
+            if t.lstrip("-").isdigit():
+                if (idstr == t) if multi else (t in idstr):
+                    return True
+            elif t in clsl:
+                return True
+        return False
+
     def _visible(self):
         cls = self.cb_class.currentData(); q = self.ed_search.text().lower().strip()
+        tokens = [t.strip() for t in q.split(",") if t.strip()]
+        multi = len(tokens) > 1
         aj = self.cb_attr.currentData(); astate = self.cb_attr_state.currentData()
         out = []
         for iid in self.em.order:
@@ -575,7 +592,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
             if self.cb_changed.isChecked() and not self._changed(iid):
                 continue
-            if q and q not in str(iid) and q not in self._cls(iid).lower():
+            if not self._search_ok(iid, tokens, multi):
                 continue
             out.append(iid)
         return out
@@ -588,12 +605,28 @@ class MainWindow(QtWidgets.QMainWindow):
         return f"{mark}{star}{flag} #{iid}  {self._cls(iid)}  ({self._count(iid):,} pts)"
 
     def _refresh_list(self):
+        # remember where we were so an edit/filter doesn't scroll us away or
+        # drop the selection
+        prev_sel = set(self._selected_ids())
+        prev_cur = self.cur
+        sb = self.list.verticalScrollBar()
+        scroll = sb.value() if sb else 0
         self._loading = True
         self.list.clear()
+        row_of = {}
         for iid in self._visible():
             it = QtWidgets.QListWidgetItem(self._row_text(iid))
-            it.setData(QtCore.Qt.UserRole, iid); self.list.addItem(it)
+            it.setData(QtCore.Qt.UserRole, iid)
+            self.list.addItem(it)
+            row_of[iid] = self.list.count() - 1
+        for iid in prev_sel:
+            if iid in row_of:
+                self.list.item(row_of[iid]).setSelected(True)
+        if prev_cur in row_of:
+            self.list.setCurrentRow(row_of[prev_cur])
         self._loading = False
+        if sb:
+            sb.setValue(scroll)
 
     def _on_current(self, row):
         if self._loading or row < 0:
@@ -922,6 +955,9 @@ class MainWindow(QtWidgets.QMainWindow):
         child = self.em.split(iid, rows[inside], SEM_NAMES.index(child_cls))
         if child is None:
             return
+        # the new instance inherits the parent's functional attributes rather
+        # than starting blank
+        self.review.get(child)["vector_human"] = list(self.review.get(iid)["vector_human"])
         self.review.dirty = True
         self.review.mark(iid, True); self.review.mark(child, True)
         self._refresh_list(); self._refresh_counter(); self._goto(child)
@@ -1096,6 +1132,17 @@ class MainWindow(QtWidgets.QMainWindow):
             g.create_dataset("review_note", data=note)
         return p
 
+    def _attrless_instances(self):
+        """Instances that have applicable attributes but none turned on — likely
+        forgotten. (Classes with no applicable attributes, and the -1 group, are
+        not flagged.)"""
+        out = []
+        for iid in self.em.order:
+            appl = [j for j in range(self.b.n_attr) if self._appl(iid, j)]
+            if appl and not any(self._attr_val(iid, j) for j in appl):
+                out.append(iid)
+        return out
+
     def _save(self):
         name = self.ed_rev.text().strip()
         if not name:
@@ -1103,6 +1150,20 @@ class MainWindow(QtWidgets.QMainWindow):
                                           "Enter your name in the Reviewer box first — it's "
                                           "stamped into your files so reviews don't collide.")
             return
+        blank = self._attrless_instances()
+        if blank:
+            shown = ", ".join(f"#{i}" for i in blank[:40])
+            more = f"  …and {len(blank) - 40} more" if len(blank) > 40 else ""
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+            box.setWindowTitle("Instances with no functional attribute")
+            box.setText(f"{len(blank)} instance(s) have applicable attributes but none set:")
+            box.setInformativeText(f"{shown}{more}\n\nSave anyway?")
+            box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes |
+                                   QtWidgets.QMessageBox.StandardButton.No)
+            box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+            if box.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
         self.review.reviewer = name
         target = self.review._json_path()
         lf = self.review.loaded_from
