@@ -908,11 +908,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # highlight exactly what will be cut, so the selection can be eyeballed
         # against the polygon before committing
         self._show_lasso_selection(pts3d[inside])
+        cur_cls = self._cls(iid)
+        default_idx = SEM_NAMES.index(cur_cls) if cur_cls in SEM_NAMES else 0
         try:
             child_cls, ok = QtWidgets.QInputDialog.getItem(
                 self, "Split → new instance",
                 f"{nsel:,} points will move to a new instance.\nClass for the new instance:",
-                SEM_NAMES, SEM_NAMES.index(self._cls(iid)), False)
+                SEM_NAMES, default_idx, False)
         finally:
             self._clear_lasso_selection()
         if not ok:
