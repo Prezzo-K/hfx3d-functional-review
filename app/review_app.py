@@ -52,6 +52,7 @@ SEM_NAMES = ["wall", "window", "door", "balcony", "vegetation", "stairs",
              "terrain", "roof", "blinds", "other", "column", "arch"]
 FLAGS = ["", "bad_segmentation", "wrong_class", "other"]
 HL_DISPLAY_CAP = 250_000          # subsample only the 3D display of huge instances
+RECENT_CAP = 50                   # how many recently-edited instances the "recent" filter keeps
 
 # Settings persist in a small config file so you don't depend on env vars
 # (which need a fresh shell after `setx`). Priority: env var > saved config >
@@ -256,6 +257,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cur = None                              # current instance id
         self._loading = False
         self._lasso_active = False
+        self._recent = []                            # instance ids, most-recently-edited first
         self._prev_style = None
         self.review = ReviewStore(bundle.building, _cfg_reviewer(),
                                   self._default_vec, bundle.n_attr)
@@ -364,7 +366,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cb_unrev = QtWidgets.QCheckBox("unreviewed"); self.cb_unrev.toggled.connect(self._refresh_list)
         self.cb_flag = QtWidgets.QCheckBox("flagged"); self.cb_flag.toggled.connect(self._refresh_list)
         self.cb_changed = QtWidgets.QCheckBox("changed"); self.cb_changed.toggled.connect(self._refresh_list)
+        self.cb_recent = QtWidgets.QCheckBox("recent")
+        self.cb_recent.setToolTip(f"Show the last {RECENT_CAP} instances you edited, most recent first")
+        self.cb_recent.toggled.connect(self._refresh_list)
         crow.addWidget(self.cb_unrev); crow.addWidget(self.cb_flag); crow.addWidget(self.cb_changed)
+        crow.addWidget(self.cb_recent)
         crow.addStretch(1); lv.addLayout(crow)
         self.list = QtWidgets.QListWidget()
         self.list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -575,13 +581,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 return True
         return False
 
+    def _mark_recent(self, iid):
+        if iid in self._recent:
+            self._recent.remove(iid)
+        self._recent.insert(0, iid)
+        del self._recent[RECENT_CAP:]
+
     def _visible(self):
         cls = self.cb_class.currentData(); q = self.ed_search.text().lower().strip()
         tokens = [t.strip() for t in q.split(",") if t.strip()]
         multi = len(tokens) > 1
         aj = self.cb_attr.currentData(); astate = self.cb_attr_state.currentData()
+        # "recent" shows only your recently-edited instances, most recent first
+        base = ([i for i in self._recent if i in self.em.rows]
+                if self.cb_recent.isChecked() else self.em.order)
         out = []
-        for iid in self.em.order:
+        for iid in base:
             if cls and self._cls(iid) != cls:
                 continue
             if aj is not None and aj >= 0 and self._attr_val(iid, aj) != astate:
@@ -693,6 +708,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for iid in ids:
             self.review.get(iid)["vector_human"][j] = val
             self.review.mark(iid, True)
+            self._mark_recent(iid)
             self._update_row(iid)
         self.review.dirty = True
         if self.cur in ids:
@@ -701,7 +717,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── edits: attributes ────────────────────────────────────────────────
     def _touch(self):
-        if self.cur is not None and not self.review.is_reviewed(self.cur):
+        if self.cur is None:
+            return
+        self._mark_recent(self.cur)
+        if not self.review.is_reviewed(self.cur):
             self.review.mark(self.cur, True); self._update_row(self.cur)
 
     def _on_check(self, j):
@@ -738,6 +757,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._loading or self.cur is None:
             return
         self.review.get(self.cur)["note"] = self.ed_note.text(); self.review.dirty = True
+        self._mark_recent(self.cur)
 
     # ── edits: segmentation (reclass / merge / split) ────────────────────
     def _on_reclass(self):
@@ -763,7 +783,10 @@ class MainWindow(QtWidgets.QMainWindow):
         for i in ids:
             if i != survivor:
                 self.review.records.pop(i, None)
-        self.review.mark(survivor, True)
+        self.review.mark(survivor, True); self._mark_recent(survivor)
+        for i in ids:
+            if i != survivor and i in self._recent:
+                self._recent.remove(i)
         self._refresh_list(); self._refresh_counter()
         self._goto(survivor)
 
@@ -960,6 +983,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.review.get(child)["vector_human"] = list(self.review.get(iid)["vector_human"])
         self.review.dirty = True
         self.review.mark(iid, True); self.review.mark(child, True)
+        self._mark_recent(iid); self._mark_recent(child)
         self._refresh_list(); self._refresh_counter(); self._goto(child)
 
     def _show_lasso_selection(self, sel_pts):
@@ -997,11 +1021,14 @@ class MainWindow(QtWidgets.QMainWindow):
         vis = self._visible()
         if not vis:
             return
-        nxt = next((i for i in vis if not self.review.is_reviewed(i)), None)
-        if nxt is None:
-            anchor = self.cur if self.cur in vis else (ids[-1] if ids and ids[-1] in vis else vis[-1])
-            nxt = vis[(vis.index(anchor) + 1) % len(vis)]
-        self._goto(nxt)
+        # advance FORWARD from where we are (wrapping), rather than jumping back
+        # to the first unreviewed at the top of the list
+        anchor = self.cur if self.cur in vis else (ids[-1] if ids and ids[-1] in vis else vis[0])
+        start = vis.index(anchor) + 1
+        forward = [vis[(start + o) % len(vis)] for o in range(len(vis))]
+        nxt = next((i for i in forward if not self.review.is_reviewed(i)), forward[0] if forward else None)
+        if nxt is not None:
+            self._goto(nxt)
 
     def _goto(self, iid):
         for r in range(self.list.count()):
